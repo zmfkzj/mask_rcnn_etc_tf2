@@ -4,10 +4,20 @@ import tensorflow.keras.models as KM
 
 
 class RPN(KM.Model):
-    def __init__(self, anchors_per_location, anchor_stride):
+    def __init__(self, anchor_stride, anchors_per_location):
         super().__init__()
-        self.anchors_per_location = anchors_per_location
-        self.anchor_stride = anchor_stride
+
+        # TODO: check if stride of 2 causes alignment issues if the feature map
+        # is not even.
+        # Shared convolutional base of the RPN
+        self.conv1 = KL.Conv2D(512, (3, 3), padding='same', activation='relu', strides=anchor_stride, name='rpn_conv_shared')
+
+        # Anchor Score. [batch, height, width, anchors per location * 2].
+        self.conv2 = KL.Conv2D(2 * anchors_per_location, (1, 1), padding='valid', activation='linear', name='rpn_class_raw')
+
+        # Bounding box refinement. [batch, H, W, anchors per location * depth]
+        # where depth is [x, y, log(w), log(h)]
+        self.conv3 = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
 
     def call(self, feature_map):
         """Builds the computation graph of Region Proposal Network.
@@ -26,25 +36,20 @@ class RPN(KM.Model):
         # TODO: check if stride of 2 causes alignment issues if the feature map
         # is not even.
         # Shared convolutional base of the RPN
-        shared = KL.Conv2D(512, (3, 3), padding='same', activation='relu',
-                        strides=self.anchor_stride,
-                        name='rpn_conv_shared')(feature_map)
+        shared = self.conv1(feature_map)
 
         # Anchor Score. [batch, height, width, anchors per location * 2].
-        x = KL.Conv2D(2 * self.anchors_per_location, (1, 1), padding='valid',
-                    activation='linear', name='rpn_class_raw')(shared)
+        x = self.conv2(shared)
 
         # Reshape to [batch, anchors, 2]
         rpn_class_logits = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))(x)
 
         # Softmax on last dimension of BG/FG.
-        rpn_probs = KL.Activation(
-            "softmax", name="rpn_class_xxx")(rpn_class_logits)
+        rpn_probs = KL.Activation( "softmax", name="rpn_class_xxx")(rpn_class_logits)
 
         # Bounding box refinement. [batch, H, W, anchors per location * depth]
         # where depth is [x, y, log(w), log(h)]
-        x = KL.Conv2D(self.anchors_per_location * 4, (1, 1), padding="valid",
-                    activation='linear', name='rpn_bbox_pred')(shared)
+        x = self.conv3(shared)
 
         # Reshape to [batch, anchors, 4]
         rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))(x)

@@ -5,4 +5,4 @@ opencv-python
 imgaug
 tensorflow==2.7.1
 h5py==2.10.0
-pycocotools-windows
+pycocotools

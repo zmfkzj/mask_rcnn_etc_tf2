@@ -16,7 +16,8 @@ class Config(object):
     NAME = None  # Override in sub-classes
 
     # NUMBER OF GPUs to use. When using only a CPU, this needs to be set to 1.
-    GPU_COUNT = 1
+    GPUS = 0, 1
+    GPU_COUNT = len(GPUS)
 
     # Number of images to train with on each GPU. A 12GB GPU can typically
     # handle 2 images of 1024x1024px.

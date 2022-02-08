@@ -3,6 +3,8 @@ import logging
 import numpy as np
 
 from MRCNN import utils
+from .model_utils.data_formatting import compose_image_meta, mold_image
+
 
 def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
                   use_mini_mask=False):
@@ -499,7 +501,7 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
-    backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
+    backbone_shapes = utils.compute_backbone_shapes(config, config.IMAGE_SHAPE)
     anchors = utils.generate_pyramid_anchors(config.RPN_ANCHOR_SCALES,
                                              config.RPN_ANCHOR_RATIOS,
                                              backbone_shapes,

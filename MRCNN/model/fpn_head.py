@@ -8,7 +8,21 @@ class FPN_classifier(KM.Model):
         super().__init__()
         self.pool_size = pool_size
         self.num_classes = num_classes
-        self.fc_layers_size=fc_layers_size
+
+
+        # Two 1024 FC layers (implemented with Conv2D for consistency)
+        self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(fc_layers_size, (pool_size, pool_size), padding="valid"), name="mrcnn_class_conv1")
+        self.timedist_bn_1 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn1')
+        self.timedist_conv_2 = KL.TimeDistributed(KL.Conv2D(fc_layers_size, (1, 1)), name="mrcnn_class_conv2")
+        self.timedist_bn_2 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn2')
+
+        # Classifier head
+        self.class_logits = KL.TimeDistributed(KL.Dense(num_classes), name='mrcnn_class_logits')
+        self.probs = KL.TimeDistributed(KL.Activation("softmax"), name="mrcnn_class")
+
+        # BBox head
+        # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
+        self.bbox = KL.TimeDistributed(KL.Dense(num_classes * 4, activation='linear'), name='mrcnn_bbox_fc')
 
     def call(self, rois, feature_maps, image_meta, train_bn=True):
         """Builds the computation graph of the feature pyramid network classifier
@@ -35,23 +49,22 @@ class FPN_classifier(KM.Model):
         x = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_classifier")([rois, image_meta] + feature_maps)
 
         # Two 1024 FC layers (implemented with Conv2D for consistency)
-        x = KL.TimeDistributed(KL.Conv2D(self.fc_layers_size, (self.pool_size, self.pool_size), padding="valid"), name="mrcnn_class_conv1")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn1')(x, training=train_bn)
+        x = self.timedist_conv_1(x)
+        x = self.timedist_bn_1(x, training=train_bn)
         x = KL.Activation('relu')(x)
-        x = KL.TimeDistributed(KL.Conv2D(self.fc_layers_size, (1, 1)), name="mrcnn_class_conv2")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn2')(x, training=train_bn)
+        x = self.timedist_conv_2(x)
+        x = self.timedist_bn_2(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
         shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")(x)
 
         # Classifier head
-        mrcnn_class_logits = KL.TimeDistributed(KL.Dense(self.num_classes), name='mrcnn_class_logits')(shared)
-        mrcnn_probs = KL.TimeDistributed(KL.Activation("softmax"), name="mrcnn_class")(mrcnn_class_logits)
+        mrcnn_class_logits = self.class_logits(shared)
+        mrcnn_probs = self.probs(mrcnn_class_logits)
 
         # BBox head
         # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
-        x = KL.TimeDistributed(KL.Dense(self.num_classes * 4, activation='linear'),
-                            name='mrcnn_bbox_fc')(shared)
+        x = self.bbox(shared)
         # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
         s = tf.shape(x)
         mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
@@ -64,6 +77,22 @@ class FPN_mask(KM.Model):
         super().__init__()
         self.pool_size = pool_size
         self.num_classes = num_classes
+
+        # Conv layers
+        self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv1")
+        self.timedist_bn_1 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_mask_bn1')
+
+        self.timedist_conv_2 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv2")
+        self.timedist_bn_2 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_mask_bn2')
+
+        self.timedist_conv_3 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv3")
+        self.timedist_bn_3 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_mask_bn3')
+
+        self.timedist_conv_4 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv4")
+        self.timedist_bn_4 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_mask_bn4')
+
+        self.timedist_convT = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"), name="mrcnn_mask_deconv")
+        self.timedist_conv_5 = KL.TimeDistributed(KL.Conv2D(self.num_classes, (1, 1), strides=1, activation="sigmoid"), name="mrcnn_mask")
 
     def call(self, rois, feature_maps, image_meta, train_bn=True):
         """Builds the computation graph of the mask head of Feature Pyramid Network.
@@ -81,36 +110,25 @@ class FPN_mask(KM.Model):
         """
         # ROI Pooling
         # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
-        x = PyramidROIAlign([self.pool_size, self.pool_size],
-                            name="roi_align_mask")([rois, image_meta] + feature_maps)
+        x = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_mask")([rois, image_meta] + feature_maps)
 
         # Conv layers
-        x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
-                            name="mrcnn_mask_conv1")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(),
-                            name='mrcnn_mask_bn1')(x, training=train_bn)
+        x = self.timedist_conv_1(x)
+        x = self.timedist_bn_1(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
-                            name="mrcnn_mask_conv2")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(),
-                            name='mrcnn_mask_bn2')(x, training=train_bn)
+        x = self.timedist_conv_2(x)
+        x = self.timedist_bn_2(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
-                            name="mrcnn_mask_conv3")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(),
-                            name='mrcnn_mask_bn3')(x, training=train_bn)
+        x = self.timedist_conv_3(x)
+        x = self.timedist_bn_3(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
-                            name="mrcnn_mask_conv4")(x)
-        x = KL.TimeDistributed(KL.BatchNormalization(),
-                            name='mrcnn_mask_bn4')(x, training=train_bn)
+        x = self.timedist_conv_4(x)
+        x = self.timedist_bn_4(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"),
-                            name="mrcnn_mask_deconv")(x)
-        x = KL.TimeDistributed(KL.Conv2D(self.num_classes, (1, 1), strides=1, activation="sigmoid"),
-                            name="mrcnn_mask")(x)
+        x = self.timedist_convT(x)
+        x = self.timedist_conv_5(x)
         return x

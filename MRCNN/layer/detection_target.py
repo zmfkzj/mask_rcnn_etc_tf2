@@ -208,8 +208,7 @@ class DetectionTargetLayer(KL.Layer):
         names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
         outputs = utils.batch_slice(
             [proposals, gt_class_ids, gt_boxes, gt_masks],
-            lambda w, x, y, z: detection_targets_graph(
-                w, x, y, z, self.config),
+            lambda w, x, y, z: detection_targets_graph( w, x, y, z, self.config),
             self.config.IMAGES_PER_GPU, names=names)
         return outputs
 
