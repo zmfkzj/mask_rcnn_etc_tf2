@@ -7,6 +7,8 @@ import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
 import numpy as np
 
+from tqdm import tqdm
+
 from MRCNN.model.mask_rcnn import MaskRCNN
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
@@ -15,25 +17,26 @@ from MRCNN.layer.roialign import parse_image_meta_graph
 
 
 class Trainer:
-    def __init__(self, model:MaskRCNN, config, train_dataset, layers,
+    def __init__(self, model:MaskRCNN, train_dataset, 
                         val_dataset = None, test_dataset = None,
                         optimizer = keras.optimizers.SGD(),
+                        config = Config(),
+                        layers = 'all',
                         logs_dir='logs/'):
-        train_dataset = 
-        
+        self.config = config
+        self.logs_dir = logs_dir
 
-        mirrored_strategy = tf.distribute.MirroredStrategy(divices=[f'/gpu:{gpu_id}' for gpu_id in config.CPUS])
-        with mirrored_strategy.scope():
+        self.mirrored_strategy = tf.distribute.MirroredStrategy(divices=[f'/gpu:{gpu_id}' for gpu_id in config.CPUS])
+        with self.mirrored_strategy.scope():
             self.model = model(config, logs_dir)
-            self.train_dataset = mirrored_strategy.experimental_distribute_dataset(
-                                    tf.data.Dataset.from_generator(self.load_dataset(train_dataset)).prefetch())
+            self.train_dataset = self.mirrored_strategy.experimental_distribute_dataset(
+                                    tf.data.Dataset.from_generator(self.load_dataset(train_dataset,training=True)).prefetch())
             if val_dataset is not None:
-                self.val_dataset = mirrored_strategy.experimental_distribute_dataset(
+                self.val_dataset = self.mirrored_strategy.experimental_distribute_dataset(
                                     tf.data.Dataset.from_generator(self.load_dataset(val_dataset)).prefetch())
             if test_dataset is not None:
-                self.test_dataset = mirrored_strategy.experimental_distribute_dataset(
+                self.test_dataset = self.mirrored_strategy.experimental_distribute_dataset(
                                     tf.data.Dataset.from_generator(self.load_dataset(test_dataset)).prefetch())
-            
             self.optimizer = optimizer
         
         # Pre-defined layer regular expressions
@@ -51,30 +54,48 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
+    
+    def train(self, max_epoch):
+        with self.mirrored_strategy.scope():
+            for epoch in range(max_epoch):
+                print(f'epoch : {epoch+1}')
+                for inputs in tqdm(self.train_dataset, desc='iter'):
+                    mean_loss = self.train_step(inputs)
+                print(mean_loss)
 
     @tf.function
-    def train_step(self, dist_images, dist_labels):
-        def step_fn(images, labels):
+    def train_step(self, dist_inputs):
+        def step_fn(inputs):
+            images, input_image_meta, \
+            input_rpn_match, input_rpn_bbox, \
+            input_gt_class_ids, input_gt_boxes, input_gt_masks = inputs
             with tf.GradientTape() as tape:
                 output = self.model(images, input_image_meta, 
                                     input_anchors=None, 
-                                    input_gt_class_ids=None, 
-                                    input_gt_boxes=None, 
-                                    input_gt_masks=None, 
+                                    input_gt_class_ids=input_gt_class_ids, 
+                                    input_gt_boxes=input_gt_boxes, 
+                                    input_gt_masks=input_gt_masks, 
                                     input_rois = None,
                                     training=True)
                 active_class_ids = KL.Lambda( lambda x: parse_image_meta_graph(x)["active_class_ids"])(input_image_meta)
-                loss = self.cal_loss(active_class_ids, *output)
+                loss = self.cal_loss(active_class_ids, input_rpn_match, input_rpn_bbox,*output) / self.config.BATCH_SIZE
+            
+            grads = tape.gradient(loss, self.model.trainable_variables)
+            self.optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
+            return loss
+        
+        per_example_losses = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
+        mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses, axis=0)
+        return mean_loss
     
     @tf.function
-    def cal_loss(self, active_class_ids, rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
-        input_rpn_match = 
-        input_rpn_bbox = 
+    def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
+                        rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 
         rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
                                         * rpn_class_loss_graph(*[input_rpn_match, rpn_class_logits]), keepdims=True)
         rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                        * rpn_bbox_loss_graph(config,*[input_rpn_bbox, input_rpn_match, rpn_bbox]), keepdims=True)
+                                        * rpn_bbox_loss_graph(self.config,*[input_rpn_bbox, input_rpn_match, rpn_bbox]), keepdims=True)
         class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
                                     * mrcnn_class_loss_graph(*[target_class_ids, mrcnn_class_logits, active_class_ids]), keepdims=True)
         bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
@@ -82,18 +103,18 @@ class Trainer:
         mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
                                     * mrcnn_mask_loss_graph(*[target_mask, target_class_ids, mrcnn_mask]), keepdims=True)
         
-        reg_losses = [
-            keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                                    for w in self.model.trainable_weights
-                                    if 'gamma' not in w.name and 'beta' not in w.name]
-
+        reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                                            for w in self.model.trainable_weights
+                                            if 'gamma' not in w.name and 'beta' not in w.name]
 
         return tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, tf.add_n(reg_losses)])
     
-    @staticmethod
-    def load_dataset(dataset, config, augmentation=None, no_augmentation_sources=None, training=False):
+    def load_dataset(self, dataset, augmentation=None, no_augmentation_sources=None, subset='train'):
+        assert subset in ['train', 'val', 'test']
         dataset.prepare()
-        if training:
-            return data_generator(dataset, config, shuffle=True, augmentation=augmentation, batch_size=config.BATCH_SIZE, no_augmentation_sources=no_augmentation_sources)
+        if subset == 'train':
+            return data_generator(dataset, self.config, shuffle=True, augmentation=augmentation, batch_size=self.config.BATCH_SIZE, no_augmentation_sources=no_augmentation_sources)
         else:
-            return data_generator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
+            return data_generator(dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
+        
+    def cal_metric(self)
