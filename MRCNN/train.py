@@ -21,10 +21,10 @@ class Trainer:
                         val_dataset = None, test_dataset = None,
                         optimizer = keras.optimizers.SGD(),
                         config = Config(),
-                        layers = 'all',
                         logs_dir='logs/'):
         self.config = config
         self.logs_dir = logs_dir
+        self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
         self.mirrored_strategy = tf.distribute.MirroredStrategy(divices=[f'/gpu:{gpu_id}' for gpu_id in config.CPUS])
         with self.mirrored_strategy.scope():
@@ -39,6 +39,10 @@ class Trainer:
                                     tf.data.Dataset.from_generator(self.load_dataset(test_dataset)).prefetch())
             self.optimizer = optimizer
         
+    
+    def train(self, max_epoch, layers):
+        assert layers in ['heads','3+','4+','5+','all']
+
         # Pre-defined layer regular expressions
         layer_regex = {
             # all layers but the backbone
@@ -54,12 +58,11 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
-    
-    def train(self, max_epoch):
+
         with self.mirrored_strategy.scope():
             for epoch in range(max_epoch):
-                print(f'epoch : {epoch+1}')
-                for inputs in tqdm(self.train_dataset, desc='iter'):
+                print(f'Epoch : {epoch+1}/{max_epoch}')
+                for inputs in tqdm(self.train_dataset, desc='iter',unit='step'):
                     mean_loss = self.train_step(inputs)
                 print(mean_loss)
 
@@ -107,7 +110,18 @@ class Trainer:
                                             for w in self.model.trainable_weights
                                             if 'gamma' not in w.name and 'beta' not in w.name]
 
-        return tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, tf.add_n(reg_losses)])
+        total_loss = tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, tf.add_n(reg_losses)])
+
+        with self.summary_writer.as_default():
+            tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
+            tf.summary.scalar('rpn_bbox_loss', rpn_bbox_loss, step=self.optimizer.iterations)
+            tf.summary.scalar('mrcnn_class_loss', class_loss, step=self.optimizer.iterations)
+            tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
+            tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
+            tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
+            tf.summary.scalar('total_loss', total_loss, step=self.optimizer.iterations)
+
+        return total_loss
     
     def load_dataset(self, dataset, augmentation=None, no_augmentation_sources=None, subset='train'):
         assert subset in ['train', 'val', 'test']
@@ -117,4 +131,5 @@ class Trainer:
         else:
             return data_generator(dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
         
-    def cal_metric(self)
+    def cal_metric(self):
+        mAP = keras.metrics.AUC(curve='PR')

@@ -1,11 +1,11 @@
 import os
 import numpy as np
 
-from MRCNN import utils
+from MRCNN.dataset import Dataset
 from pycocotools.coco import COCO
 from pycocotools import mask as maskUtils
 
-class CocoDataset(utils.Dataset):
+class CocoDataset(Dataset):
     def load_coco(self, image_dir, coco_json, class_ids=None, return_coco=False):
         """Load a subset of the COCO dataset.
         dataset_dir: The root directory of the COCO dataset.

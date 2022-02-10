@@ -55,7 +55,8 @@ class MaskRCNN(KM.Model):
         self.conv7 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")
         self.conv8 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")
 
-    def call(self, input_image, input_image_meta, 
+    def call(self, input_image, 
+                    input_image_meta=None, 
                     input_anchors=None, 
                     input_gt_class_ids=None, 
                     input_gt_boxes=None, 
