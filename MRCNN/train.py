@@ -12,8 +12,9 @@ from tqdm import tqdm
 from MRCNN.model.mask_rcnn import MaskRCNN
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
-from MRCNN.data_generator import data_generator, compose_image_meta, mold_image
+from MRCNN.data_generator import data_generator
 from MRCNN.layer.roialign import parse_image_meta_graph
+from MRCNN.evaluation import Evaluator
 
 
 class Trainer:
@@ -31,15 +32,17 @@ class Trainer:
             self.model = model(config, logs_dir)
             self.train_dataset = self.mirrored_strategy.experimental_distribute_dataset(
                                     tf.data.Dataset.from_generator(self.load_dataset(train_dataset,training=True)).prefetch())
-            if val_dataset is not None:
-                self.val_dataset = self.mirrored_strategy.experimental_distribute_dataset(
-                                    tf.data.Dataset.from_generator(self.load_dataset(val_dataset)).prefetch())
-            if test_dataset is not None:
-                self.test_dataset = self.mirrored_strategy.experimental_distribute_dataset(
-                                    tf.data.Dataset.from_generator(self.load_dataset(test_dataset)).prefetch())
             self.optimizer = optimizer
-        
-    
+
+        if val_dataset is not None:
+            self.val_dataset = self.load_dataset(val_dataset)
+        else:
+            self.val_dataset = None
+        if test_dataset is not None:
+            self.test_dataset = self.load_dataset(test_dataset)
+        else:
+            self.test_dataset = None
+
     def train(self, max_epoch, layers):
         assert layers in ['heads','3+','4+','5+','all']
 
@@ -59,12 +62,40 @@ class Trainer:
 
         self.model.set_trainable(layers)
 
-        with self.mirrored_strategy.scope():
-            for epoch in range(max_epoch):
-                print(f'Epoch : {epoch+1}/{max_epoch}')
-                for inputs in tqdm(self.train_dataset, desc='iter',unit='step'):
-                    mean_loss = self.train_step(inputs)
-                print(mean_loss)
+        for epoch in range(max_epoch):
+            pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step')
+            with self.mirrored_strategy.scope():
+                for i, inputs in enumerate(self.train_dataset):
+                    if self.config.STEPS_PER_EPOCH < i:
+                        mean_loss = self.train_step(inputs)
+                    else:
+                        break
+
+                    pbar.update()
+                    pbar.set_postfix({'mean_loss':mean_loss})
+            pbar.close()
+
+            if self.val_dataset is not None:
+                print('Validation Dataset Evaluating...')
+                valEval = Evaluator(self.model, self.val_dataset)
+                val_recall, val_precision, val_mAP, val_F1 = valEval.evaluate()
+
+                with self.summary_writer.as_default():
+                    tf.summary.scalar('val_recall', val_recall, step=epoch)
+                    tf.summary.scalar('val_precision', val_precision, step=epoch)
+                    tf.summary.scalar('val_mAP', val_mAP, step=epoch)
+                    tf.summary.scalar('val_F1', val_F1, step=epoch)
+
+            if self.test_dataset is not None:
+                print('Test Dataset Evaluating...')
+                testEval = Evaluator(self.model, self.test_dataset)
+                test_recall, test_precision, test_mAP, test_F1 = testEval.evaluate()
+
+                with self.summary_writer.as_default():
+                    tf.summary.scalar('test_recall', test_recall, step=epoch)
+                    tf.summary.scalar('test_precision', test_precision, step=epoch)
+                    tf.summary.scalar('test_mAP', test_mAP, step=epoch)
+                    tf.summary.scalar('test_F1', test_F1, step=epoch)
 
     @tf.function
     def train_step(self, dist_inputs):
@@ -130,6 +161,3 @@ class Trainer:
             return data_generator(dataset, self.config, shuffle=True, augmentation=augmentation, batch_size=self.config.BATCH_SIZE, no_augmentation_sources=no_augmentation_sources)
         else:
             return data_generator(dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
-        
-    def cal_metric(self):
-        mAP = keras.metrics.AUC(curve='PR')
