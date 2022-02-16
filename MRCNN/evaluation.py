@@ -3,6 +3,7 @@ import time
 
 from MRCNN.data_loader import CocoDataset
 
+from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as maskUtils
 
@@ -38,7 +39,7 @@ class Evaluator:
         return results
 
 
-    def evaluate(self, coco, limit=0, image_ids=None):
+    def evaluate(self, gt_json, limit=0, image_ids=None):
         """Runs official COCO evaluation.
         dataset: A Dataset object with valiadtion data
         eval_type: "bbox" or "segm" for bounding box or segmentation evaluation
@@ -69,13 +70,14 @@ class Evaluator:
 
             # Convert results to COCO format
             # Cast masks to uint8 because COCO tools errors out on bool
-            image_results = self.build_coco_results(self.dataset, coco_image_ids[i:i + 1],
-                                            r["rois"], r["class_ids"],
-                                            r["scores"],
-                                            r["masks"].astype(np.uint8))
+            image_results = self.build_coco_results(coco_image_ids[i:i + 1],
+                                                    r["rois"], r["class_ids"],
+                                                    r["scores"],
+                                                    r["masks"].astype(np.uint8))
             results.extend(image_results)
 
         # Load results. This modifies results with additional attributes.
+        coco = COCO(gt_json)
         coco_results = coco.loadRes(results)
 
         # Evaluate

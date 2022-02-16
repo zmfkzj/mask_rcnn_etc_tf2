@@ -1,6 +1,4 @@
 import os
-import re
-import datetime
 import tensorflow as tf
 import tensorflow.keras as keras
 import tensorflow.keras.layers as KL
@@ -61,6 +59,7 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
+        self.model.summary()
 
         for epoch in range(max_epoch):
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step')
@@ -74,6 +73,8 @@ class Trainer:
                     pbar.update()
                     pbar.set_postfix({'mean_loss':mean_loss})
             pbar.close()
+
+            self.model.save(os.path.join(f'{self.logs_dir}',f'{epoch}'))
 
             if self.val_dataset is not None:
                 print('Validation Dataset Evaluating...')
@@ -161,3 +162,6 @@ class Trainer:
             return data_generator(dataset, self.config, shuffle=True, augmentation=augmentation, batch_size=self.config.BATCH_SIZE, no_augmentation_sources=no_augmentation_sources)
         else:
             return data_generator(dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
+    
+    def save(self):
+        self.model.save()
