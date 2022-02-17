@@ -17,7 +17,6 @@ class Config(object):
 
     # NUMBER OF GPUs to use. When using only a CPU, this needs to be set to 1.
     GPUS = 0, 1
-    GPU_COUNT = 2
 
     # Number of images to train with on each GPU. A 12GB GPU can typically
     # handle 2 images of 1024x1024px.
@@ -205,6 +204,10 @@ class Config(object):
     def __init__(self):
         """Set values of computed attributes."""
         # Effective batch size
+        if isinstance(self.GPUS, int):
+            self.GPU_COUNT = 1
+        else:
+            self.GPU_COUNT = len(self.GPUS)
         self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size

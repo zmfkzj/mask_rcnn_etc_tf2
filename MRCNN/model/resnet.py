@@ -53,7 +53,7 @@ class Conv_block(KM.Model):
         self.res_branch2b = KL.Conv2D(nb_filter2, (3,3), padding='same', name=f'{conv_name_base}2b', use_bias=use_bias)
         self.bn_branch2b = KL.BatchNormalization(name=f'{bn_name_base}2b')
 
-        self.res_branch2c = KL.Conv2D(nb_filter3, (1,1), name=f'{conv_name_base}2c', use_bias=use_bias)(x)
+        self.res_branch2c = KL.Conv2D(nb_filter3, (1,1), name=f'{conv_name_base}2c', use_bias=use_bias)
         self.bn_branch2c = KL.BatchNormalization(name=f'{bn_name_base}2c')
 
         self.res_branch1 = KL.Conv2D(nb_filter3, (1,1), strides=strides, name=f'{conv_name_base}1', use_bias=use_bias)
@@ -64,15 +64,15 @@ class Conv_block(KM.Model):
     def call(self, input_tensor, train_bn=True):
 
         x = self.res_branch2a(input_tensor)
-        x = self.bn_branch2a(x,traininig=train_bn)
+        x = self.bn_branch2a(x,training=train_bn)
         x = KL.ReLU()(x)
 
         x = self.res_branch2b(x)
-        x = self.bn_branch2b(x,traininig=train_bn)
+        x = self.bn_branch2b(x,training=train_bn)
         x = KL.ReLU()(x)
 
         x = self.res_branch2c(x)
-        x = self.bn_branch2c(x,traininig=train_bn)
+        x = self.bn_branch2c(x,training=train_bn)
         x = KL.ReLU()(x)
 
         shortcut = self.res_branch1(input_tensor)
@@ -112,7 +112,7 @@ class Resnet(KM.Model):
             self.stage5_identity_1 = Identity_block([512, 512, 2048], stage=5, block='b')
             self.stage5_identity_2 = Identity_block([512, 512, 2048], stage=5, block='c')
 
-    def resnet_graph(self, input_image, train_bn=True):
+    def call(self, input_image, train_bn=True):
         #stage1
         x = KL.ZeroPadding2D(padding=(3,3))(input_image)
         x = self.stage1_conv(x)
@@ -122,7 +122,7 @@ class Resnet(KM.Model):
         #stage2
         x = self.stage2_conv(x, train_bn=train_bn)
         x = self.stage2_identity_1(x, train_bn=train_bn)
-        C2 = x = self.stage2_identity_2(x, train_bn=train_bn)(x, train_bn=train_bn)
+        C2 = x = self.stage2_identity_2(x, train_bn=train_bn)
         #stage3
         x = self.stage3_conv(x, train_bn=train_bn)
         x = self.stage3_identity_1(x, train_bn=train_bn)

@@ -621,7 +621,7 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                         outputs.extend(
                             [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask])
 
-                yield inputs, outputs
+                yield tuple(inputs), tuple(outputs)
 
                 # start a new batch
                 b = 0

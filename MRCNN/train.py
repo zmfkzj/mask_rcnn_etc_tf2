@@ -22,14 +22,27 @@ class Trainer:
                         config = Config(),
                         logs_dir='logs/'):
         self.config = config
-        self.logs_dir = logs_dir
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
-        self.mirrored_strategy = tf.distribute.MirroredStrategy(divices=[f'/gpu:{gpu_id}' for gpu_id in config.CPUS])
+        if isinstance(config.GPUS, int):
+            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'])
+        else:
+            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in config.GPUS])
+        train_dataset = self.load_dataset(train_dataset,subset='train')
         with self.mirrored_strategy.scope():
-            self.model = model(config, logs_dir)
+            self.model = model
             self.train_dataset = self.mirrored_strategy.experimental_distribute_dataset(
-                                    tf.data.Dataset.from_generator(self.load_dataset(train_dataset,training=True)).prefetch())
+                                    tf.data.Dataset.from_generator(lambda : train_dataset,
+                                                    output_signature=(((tf.TensorSpec(shape=(config.BATCH_SIZE,config.IMAGE_MAX_DIM,config.IMAGE_MAX_DIM,config.IMAGE_CHANNEL_COUNT), dtype=np.float32),
+                                                                    #    tf.RaggedTensorSpec(shape=(config.BATCH_SIZE,None), dtype=tf.float64),
+                                                                    #    tf.RaggedTensorSpec(shape=(config.BATCH_SIZE,None, 1), dtype=tf.int32),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,93), dtype=np.float64),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,261888, 1), dtype=np.int32),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,config.RPN_TRAIN_ANCHORS_PER_IMAGE,4), dtype=np.float64),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
+                                                                       tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
+                                                                    ()))).prefetch(tf.data.AUTOTUNE))
             self.optimizer = optimizer
 
         if val_dataset is not None:
@@ -59,13 +72,18 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
-        self.model.summary()
+        # self.model.build(input_shape=(self.config.BATCH_SIZE,self.config.IMAGE_MAX_DIM,self.config.IMAGE_MAX_DIM,3))
+        # self.model.summary()
+
+        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
+        manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+        status = ckpt.restore(manager.latest_checkpoint)
 
         for epoch in range(max_epoch):
-            pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step')
+            pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
                 for i, inputs in enumerate(self.train_dataset):
-                    if self.config.STEPS_PER_EPOCH < i:
+                    if self.config.STEPS_PER_EPOCH >= i:
                         mean_loss = self.train_step(inputs)
                     else:
                         break
@@ -74,7 +92,7 @@ class Trainer:
                     pbar.set_postfix({'mean_loss':mean_loss})
             pbar.close()
 
-            self.model.save(os.path.join(f'{self.logs_dir}',f'{epoch}'))
+            manager.save()
 
             if self.val_dataset is not None:
                 print('Validation Dataset Evaluating...')
@@ -101,9 +119,9 @@ class Trainer:
     @tf.function
     def train_step(self, dist_inputs):
         def step_fn(inputs):
-            images, input_image_meta, \
+            (images, input_image_meta, \
             input_rpn_match, input_rpn_bbox, \
-            input_gt_class_ids, input_gt_boxes, input_gt_masks = inputs
+            input_gt_class_ids, input_gt_boxes, input_gt_masks),_ = inputs
             with tf.GradientTape() as tape:
                 output = self.model(images, input_image_meta, 
                                     input_anchors=None, 

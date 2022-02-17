@@ -11,6 +11,7 @@ from .rpn import RPN
 from ..layer.detection import DetectionLayer
 from ..layer.detection_target import DetectionTargetLayer
 from ..layer.proposal import ProposalLayer
+from ..layer.anchors import AnchorsLayer
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..model_utils.data_formatting import mold_image, compose_image_meta
 from ..utils import log, compute_backbone_shapes
@@ -106,14 +107,17 @@ class MaskRCNN(KM.Model):
             # TODO: can this be optimized to avoid duplicating the anchors?
             anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
             # A hack to get around Keras's bad support for constants
-            anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
+            anchors = AnchorsLayer(anchors, name='anchors')(input_image)
+            # anchors = KL.Lambda(lambda x: anchLayer, name="anchors")(input_image)
+            # anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
         else:
             anchors = input_anchors
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
         for p in rpn_feature_maps:
-            layer_outputs.append(self.rpn([p]))
+
+            layer_outputs.append(self.rpn(p))
         # Concatenate layer outputs
         # Convert from list of lists of level outputs to list of lists
         # of outputs across levels.
@@ -137,11 +141,11 @@ class MaskRCNN(KM.Model):
 
         if training:
             # Normalize coordinates
-            gt_boxes = KL.Lambda(lambda x: norm_boxes_graph( x, tf.shape(input_image)[1:3]))(input_gt_boxes)
+            gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(tf.cast(x,tf.float32), input_image.shape[1:3]))(input_gt_boxes)
 
             if not self.config.USE_RPN_ROIS:
                 # Normalize coordinates
-                target_rois = KL.Lambda(lambda x: norm_boxes_graph(x, tf.shape(input_image)[1:3]))(input_rois)
+                target_rois = KL.Lambda(lambda x: norm_boxes_graph(tf.cast(x,tf.float32), input_image.shape[1:3]))(input_rois)
             else:
                 target_rois = rpn_rois
 
