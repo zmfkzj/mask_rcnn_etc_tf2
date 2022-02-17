@@ -109,17 +109,18 @@ class ProposalLayer(KL.Layer):
         # for small objects, so we're skipping it.
 
         # Non-max suppression
-        def nms(boxes, scores):
-            indices = tf.image.non_max_suppression(
-                boxes, scores, self.proposal_count,
-                self.nms_threshold, name="rpn_non_max_suppression")
-            proposals = tf.gather(boxes, indices)
-            # Pad if needed
-            padding = tf.maximum(self.proposal_count - proposals.shape[0], 0)
-            proposals = tf.pad(proposals, [(0, padding), (0, 0)])
-            return proposals
-        proposals = utils.batch_slice([boxes, scores], nms,
-                                      self.config.IMAGES_PER_GPU)
+        # def nms(boxes, scores):
+        #     indices = tf.image.non_max_suppression(
+        #         boxes, scores, self.proposal_count,
+        #         self.nms_threshold, name="rpn_non_max_suppression")
+        #     proposals = tf.gather(boxes, indices)
+        #     # Pad if needed
+        #     padding = tf.maximum(self.proposal_count - proposals.shape[0], 0)
+        #     proposals = tf.pad(proposals, [(0, padding), (0, 0)])
+        #     return proposals
+        # proposals = utils.batch_slice([boxes, scores], nms,
+        #                               self.config.IMAGES_PER_GPU)
+        proposals = tf.image.non_max_suppression_padded(boxes,scores,self.proposal_count,pad_to_max_output_size=True, name="rpn_non_max_suppression")
         return proposals
 
     def compute_output_shape(self, input_shape):
