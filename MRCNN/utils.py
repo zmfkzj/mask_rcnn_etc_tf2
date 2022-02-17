@@ -26,13 +26,13 @@ def extract_bboxes(mask):
 
     Returns: bbox array [num_instances, (y1, x1, y2, x2)].
     """
-    boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
-    for i in range(mask.shape[-1]):
+    boxes = np.zeros([tf.shape(mask)[-1], 4], dtype=np.int32)
+    for i in range(tf.shape(mask)[-1]):
         m = mask[:, :, i]
         # Bounding box.
         horizontal_indicies = np.where(np.any(m, axis=0))[0]
         vertical_indicies = np.where(np.any(m, axis=1))[0]
-        if horizontal_indicies.shape[0]:
+        if tf.shape(horizontal_indicies)[0]:
             x1, x2 = horizontal_indicies[[0, -1]]
             y1, y2 = vertical_indicies[[0, -1]]
             # x2 and y2 should not be part of the box. Increment by 1.
@@ -79,8 +79,8 @@ def compute_overlaps(boxes1, boxes2):
 
     # Compute overlaps to generate matrix [boxes1 count, boxes2 count]
     # Each cell contains the IoU value.
-    overlaps = np.zeros((boxes1.shape[0], boxes2.shape[0]))
-    for i in range(overlaps.shape[1]):
+    overlaps = np.zeros((tf.shape(boxes1)[0], tf.shape(boxes2)[0]))
+    for i in range(tf.shape(overlaps)[1]):
         box2 = boxes2[i]
         overlaps[:, i] = compute_iou(box2, boxes1, area2[i], area1)
     return overlaps

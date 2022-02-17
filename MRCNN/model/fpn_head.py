@@ -66,8 +66,9 @@ class FPN_classifier(KM.Model):
         # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
         x = self.bbox(shared)
         # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
-        s = x.shape
-        mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
+        s = tf.shape(x)
+        # mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
+        mrcnn_bbox = tf.reshape(x,(s[0], s[1], self.num_classes, 4),name="mrcnn_bbox")
 
         return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 

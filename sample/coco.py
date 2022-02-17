@@ -10,12 +10,13 @@ class CustomConfig(Config):
     # GPUS = 0,1
     GPUS = 0
     NUM_CLASSES = 1+80 
+    LEARNING_RATE = 0.0001
 
 train_dataset = CocoDataset()
-train_dataset.load_coco('j:/62Nas/mk/dataset/coco/train2017', 'j:/62Nas/mk/dataset/coco/annotations/instances_train2017.json')
+train_dataset.load_coco('/Users/mkkim/dataset/train2017/', '/Users/mkkim/dataset/annotations/instances_train2017.json')
 
 val_dataset = CocoDataset()
-val_dataset.load_coco('j:/62Nas/mk/dataset/coco/val2017/', 'j:/62Nas/mk/dataset/coco/annotations/instances_val2017.json')
+val_dataset.load_coco('/Users/mkkim/dataset/val2017/', '/Users/mkkim/dataset/annotations/instances_val2017.json')
 
 config = CustomConfig()
 model = MaskRCNN(config)

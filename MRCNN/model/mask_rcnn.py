@@ -105,7 +105,7 @@ class MaskRCNN(KM.Model):
             anchors = self.get_anchors(self.config.IMAGE_SHAPE)
             # Duplicate across the batch dimension because Keras requires it
             # TODO: can this be optimized to avoid duplicating the anchors?
-            anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+            anchors = tf.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
             # A hack to get around Keras's bad support for constants
             anchors = AnchorsLayer(anchors, name='anchors')(input_image)
             # anchors = KL.Lambda(lambda x: anchLayer, name="anchors")(input_image)
@@ -272,7 +272,7 @@ class MaskRCNN(KM.Model):
         anchors = self.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        anchors = tf.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)

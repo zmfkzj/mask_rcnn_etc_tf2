@@ -65,7 +65,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
         # Map indices
         class_keep = tf.gather(keep, tf.gather(ixs, class_keep))
         # Pad with -1 so returned tensors have the same shape
-        gap = config.DETECTION_MAX_INSTANCES - class_keep.shape[0]
+        gap = config.DETECTION_MAX_INSTANCES - tf.shape(class_keep)[0]
         class_keep = tf.pad(class_keep, [(0, gap)],
                             mode='CONSTANT', constant_values=-1)
         # Set shape so map_fn() can infer result shape
@@ -85,7 +85,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     # Keep top detections
     roi_count = config.DETECTION_MAX_INSTANCES
     class_scores_keep = tf.gather(class_scores, keep)
-    num_keep = tf.minimum(class_scores_keep.shape[0], roi_count)
+    num_keep = tf.minimum(tf.shape(class_scores_keep)[0], roi_count)
     top_ids = tf.nn.top_k(class_scores_keep, k=num_keep, sorted=True)[1]
     keep = tf.gather(keep, top_ids)
 
@@ -98,7 +98,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
         ], axis=1)
 
     # Pad with zeros if detections < DETECTION_MAX_INSTANCES
-    gap = config.DETECTION_MAX_INSTANCES - detections.shape[0]
+    gap = config.DETECTION_MAX_INSTANCES - tf.shape(detections)[0]
     detections = tf.pad(detections, [(0, gap), (0, 0)], "CONSTANT")
     return detections
 

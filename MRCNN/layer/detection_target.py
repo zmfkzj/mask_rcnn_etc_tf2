@@ -12,10 +12,10 @@ def overlaps_graph(boxes1, boxes2):
     # TF doesn't have an equivalent to np.repeat() so simulate it
     # using tf.tile() and tf.reshape.
     b1 = tf.reshape(tf.tile(tf.expand_dims(boxes1, 1),
-                            [1, 1, boxes2.shape[0]]), [-1, 4])
-    b2 = tf.tile(boxes2, [boxes1.shape[0], 1])
+                            [1, 1, tf.shape(boxes2)[0]]), [-1, 4])
+    b2 = tf.tile(boxes2, [tf.shape(boxes1)[0], 1])
     # 2. Compute intersections
-    b1_y1, b1_x1, b1_y2, b1_x2 = tf.split(b1, 4, axis=1)
+    b1_y1, b1_x1, b1_y2, b1_x2 = tf.split(tf.cast(b1, tf.float32), 4, axis=1)
     b2_y1, b2_x1, b2_y2, b2_x2 = tf.split(b2, 4, axis=1)
     y1 = tf.maximum(b1_y1, b2_y1)
     x1 = tf.maximum(b1_x1, b2_x1)
@@ -28,7 +28,7 @@ def overlaps_graph(boxes1, boxes2):
     union = b1_area + b2_area - intersection
     # 4. Compute IoU and reshape to [boxes1, boxes2]
     iou = intersection / union
-    overlaps = tf.reshape(iou, [boxes1.shape[0], boxes2.shape[0]])
+    overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])
     return overlaps
 
 
@@ -55,7 +55,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     """
     # Assertions
     asserts = [
-        tf.Assert(tf.greater(proposals.shape[0], 0), [proposals],
+        tf.Assert(tf.greater(tf.shape(proposals)[0], 0), [proposals],
                   name="roi_assertion"),
     ]
     with tf.control_dependencies(asserts):
@@ -100,7 +100,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     positive_count = int(config.TRAIN_ROIS_PER_IMAGE *
                          config.ROI_POSITIVE_RATIO)
     positive_indices = tf.random.shuffle(positive_indices)[:positive_count]
-    positive_count = positive_indices.shape[0]
+    positive_count = tf.shape(positive_indices)[0]
     # Negative ROIs. Add enough to maintain positive:negative ratio.
     r = 1.0 / config.ROI_POSITIVE_RATIO
     negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
@@ -112,7 +112,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Assign positive ROIs to GT boxes.
     positive_overlaps = tf.gather(overlaps, positive_indices)
     roi_gt_box_assignment = tf.cond(
-        tf.greater(positive_overlaps.shape[1], 0),
+        tf.greater(tf.shape(positive_overlaps)[1], 0),
         true_fn = lambda: tf.argmax(positive_overlaps, axis=1),
         false_fn = lambda: tf.cast(tf.constant([]),tf.int64)
     )
@@ -134,7 +134,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     if config.USE_MINI_MASK:
         # Transform ROI coordinates from normalized image space
         # to normalized mini-mask space.
-        y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
+        y1, x1, y2, x2 = tf.split(tf.cast(positive_rois, tf.float32), 4, axis=1)
         gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
         gt_h = gt_y2 - gt_y1
         gt_w = gt_x2 - gt_x1
@@ -143,7 +143,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
         y2 = (y2 - gt_y1) / gt_h
         x2 = (x2 - gt_x1) / gt_w
         boxes = tf.concat([y1, x1, y2, x2], 1)
-    box_ids = tf.range(0, roi_masks.shape[0])
+    box_ids = tf.range(0, tf.shape(roi_masks)[0])
     masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
                                      box_ids,
                                      config.MASK_SHAPE)
@@ -157,8 +157,8 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Append negative ROIs and pad bbox deltas and masks that
     # are not used for negative ROIs with zeros.
     rois = tf.concat([positive_rois, negative_rois], axis=0)
-    N = negative_rois.shape[0]
-    P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - rois.shape[0], 0)
+    N = tf.shape(negative_rois)[0]
+    P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - tf.shape(rois)[0], 0)
     rois = tf.pad(rois, [(0, P), (0, 0)])
     roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
     roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])

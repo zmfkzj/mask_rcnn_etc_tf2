@@ -96,7 +96,7 @@ class PyramidROIAlign(KL.Layer):
         # Pack box_to_level mapping into one array and add another
         # column representing the order of pooled boxes
         box_to_level = tf.concat(box_to_level, axis=0)
-        box_range = tf.expand_dims(tf.range(box_to_level.shape[0]), 1)
+        box_range = tf.expand_dims(tf.range(tf.shape(box_to_level)[0]), 1)
         box_to_level = tf.concat([tf.cast(box_to_level, tf.int32), box_range],
                                  axis=1)
 
@@ -104,12 +104,12 @@ class PyramidROIAlign(KL.Layer):
         # Sort box_to_level by batch then box index
         # TF doesn't have a way to sort by two columns, so merge them and sort.
         sorting_tensor = box_to_level[:, 0] * 100000 + box_to_level[:, 1]
-        ix = tf.nn.top_k(sorting_tensor, k=box_to_level.shape[0]).indices[::-1]
+        ix = tf.nn.top_k(sorting_tensor, k=tf.shape(box_to_level)[0]).indices[::-1]
         ix = tf.gather(box_to_level[:, 2], ix)
         pooled = tf.gather(pooled, ix)
 
         # Re-add the batch dimension
-        shape = tf.concat([boxes.shape[:2], pooled.shape[1:]], axis=0)
+        shape = tf.concat([tf.shape(boxes)[:2], tf.shape(pooled)[1:]], axis=0)
         pooled = tf.reshape(pooled, shape)
         return pooled
 

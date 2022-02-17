@@ -25,7 +25,8 @@ class Trainer:
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
         if isinstance(config.GPUS, int):
-            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'])
+            # self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'])
+            self.mirrored_strategy = tf.distribute.MirroredStrategy()
         else:
             self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in config.GPUS])
         train_dataset = self.load_dataset(train_dataset,subset='train')
@@ -89,7 +90,7 @@ class Trainer:
                         break
 
                     pbar.update()
-                    pbar.set_postfix({'mean_loss':mean_loss})
+                    pbar.set_postfix({'mean_loss':mean_loss.numpy()})
             pbar.close()
 
             manager.save()
@@ -116,7 +117,7 @@ class Trainer:
                     tf.summary.scalar('test_mAP', test_mAP, step=epoch)
                     tf.summary.scalar('test_F1', test_F1, step=epoch)
 
-    @tf.function
+    # @tf.function
     def train_step(self, dist_inputs):
         def step_fn(inputs):
             (images, input_image_meta, \
@@ -138,10 +139,13 @@ class Trainer:
             return loss
         
         per_example_losses = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
-        mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses, axis=0)
-        return mean_loss
+        if per_example_losses.shape!=():
+            mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses, axis=0)
+            return mean_loss
+        else:
+            return per_example_losses
     
-    @tf.function
+    # @tf.function
     def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 
@@ -156,11 +160,11 @@ class Trainer:
         mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
                                     * mrcnn_mask_loss_graph(*[target_mask, target_class_ids, mrcnn_mask]), keepdims=True)
         
-        reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+        reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                                             for w in self.model.trainable_weights
-                                            if 'gamma' not in w.name and 'beta' not in w.name]
+                                            if 'gamma' not in w.name and 'beta' not in w.name])
 
-        total_loss = tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, tf.add_n(reg_losses)])
+        total_loss = tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses])
 
         with self.summary_writer.as_default():
             tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
