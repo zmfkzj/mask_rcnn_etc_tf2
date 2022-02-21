@@ -9,6 +9,9 @@ class FPN_classifier(KM.Model):
         self.pool_size = pool_size
         self.num_classes = num_classes
 
+        # ROI Pooling
+        # Shape: [batch, num_rois, POOL_SIZE, POOL_SIZE, channels]
+        self.ROIAlign = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_classifier")
 
         # Two 1024 FC layers (implemented with Conv2D for consistency)
         self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(fc_layers_size, (pool_size, pool_size), padding="valid"), name="mrcnn_class_conv1")
@@ -46,7 +49,7 @@ class FPN_classifier(KM.Model):
         """
         # ROI Pooling
         # Shape: [batch, num_rois, POOL_SIZE, POOL_SIZE, channels]
-        x = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_classifier")([rois, image_meta] + feature_maps)
+        x = self.ROIAlign([rois, image_meta] + feature_maps)
 
         # Two 1024 FC layers (implemented with Conv2D for consistency)
         x = self.timedist_conv_1(x)
@@ -68,7 +71,7 @@ class FPN_classifier(KM.Model):
         # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
         s = tf.shape(x)
         # mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
-        mrcnn_bbox = tf.reshape(x,(s[0], s[1], self.num_classes, 4),name="mrcnn_bbox")
+        mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(s[0], s[1], self.num_classes, 4),name="mrcnn_bbox"))(x)
 
         return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 
@@ -78,6 +81,10 @@ class FPN_mask(KM.Model):
         super().__init__()
         self.pool_size = pool_size
         self.num_classes = num_classes
+
+        # ROI Pooling
+        # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
+        self.ROIAlign = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_mask")
 
         # Conv layers
         self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv1")
@@ -111,7 +118,7 @@ class FPN_mask(KM.Model):
         """
         # ROI Pooling
         # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
-        x = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_mask")([rois, image_meta] + feature_maps)
+        x = self.ROIAlign([rois, image_meta] + feature_maps)
 
         # Conv layers
         x = self.timedist_conv_1(x)

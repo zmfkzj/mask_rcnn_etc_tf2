@@ -24,19 +24,22 @@ class Trainer:
         self.config = config
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
-        if isinstance(config.GPUS, int):
-            # self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'])
-            self.mirrored_strategy = tf.distribute.MirroredStrategy()
+        if os.name == 'nt':
+            cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
         else:
-            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in config.GPUS])
+            cross_device_ops = tf.distribute.NcclAllReduce()
+
+        if isinstance(config.GPUS, int):
+            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'], cross_device_ops=cross_device_ops)
+            # self.mirrored_strategy = tf.distribute.MirroredStrategy()
+        else:
+            self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in config.GPUS], cross_device_ops=cross_device_ops)
         train_dataset = self.load_dataset(train_dataset,subset='train')
         with self.mirrored_strategy.scope():
             self.model = model
             self.train_dataset = self.mirrored_strategy.experimental_distribute_dataset(
                                     tf.data.Dataset.from_generator(lambda : train_dataset,
                                                     output_signature=(((tf.TensorSpec(shape=(config.BATCH_SIZE,config.IMAGE_MAX_DIM,config.IMAGE_MAX_DIM,config.IMAGE_CHANNEL_COUNT), dtype=np.float32),
-                                                                    #    tf.RaggedTensorSpec(shape=(config.BATCH_SIZE,None), dtype=tf.float64),
-                                                                    #    tf.RaggedTensorSpec(shape=(config.BATCH_SIZE,None, 1), dtype=tf.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,93), dtype=np.float64),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,261888, 1), dtype=np.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.RPN_TRAIN_ANCHORS_PER_IMAGE,4), dtype=np.float64),
@@ -47,7 +50,16 @@ class Trainer:
             self.optimizer = optimizer
 
         if val_dataset is not None:
-            self.val_dataset = self.load_dataset(val_dataset)
+            val_dataset = self.load_dataset(val_dataset)
+            self.val_dataset = tf.data.Dataset.from_generator(lambda : val_dataset, 
+                                                    output_signature=(((tf.TensorSpec(shape=(config.BATCH_SIZE,config.IMAGE_MAX_DIM,config.IMAGE_MAX_DIM,config.IMAGE_CHANNEL_COUNT), dtype=np.float32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,93), dtype=np.float64),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,261888, 1), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.RPN_TRAIN_ANCHORS_PER_IMAGE,4), dtype=np.float64),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
+                                                                    ()))).prefetch(tf.data.AUTOTUNE)
         else:
             self.val_dataset = None
         if test_dataset is not None:
@@ -73,9 +85,7 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
-        # self.model.build(input_shape=(self.config.BATCH_SIZE,self.config.IMAGE_MAX_DIM,self.config.IMAGE_MAX_DIM,3))
-        # self.model.summary()
-
+        
         ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
         manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
         status = ckpt.restore(manager.latest_checkpoint)
@@ -83,7 +93,7 @@ class Trainer:
         for epoch in range(max_epoch):
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
-                for i, inputs in enumerate(self.train_dataset):
+                for i, (inputs, _) in enumerate(self.train_dataset):
                     if self.config.STEPS_PER_EPOCH >= i:
                         mean_loss = self.train_step(inputs)
                     else:
@@ -117,12 +127,14 @@ class Trainer:
                     tf.summary.scalar('test_mAP', test_mAP, step=epoch)
                     tf.summary.scalar('test_F1', test_F1, step=epoch)
 
-    # @tf.function
+    @tf.function
     def train_step(self, dist_inputs):
-        def step_fn(inputs):
-            (images, input_image_meta, \
-            input_rpn_match, input_rpn_bbox, \
-            input_gt_class_ids, input_gt_boxes, input_gt_masks),_ = inputs
+        images, input_image_meta, \
+        input_rpn_match, input_rpn_bbox, \
+        input_gt_class_ids, input_gt_boxes, input_gt_masks = dist_inputs
+        def step_fn(images, input_image_meta, 
+                    input_rpn_match, input_rpn_bbox, 
+                    input_gt_class_ids, input_gt_boxes, input_gt_masks):
             with tf.GradientTape() as tape:
                 output = self.model(images, input_image_meta, 
                                     input_anchors=None, 
@@ -138,27 +150,26 @@ class Trainer:
             self.optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
             return loss
         
-        per_example_losses = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
-        if per_example_losses.shape!=():
-            mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses, axis=0)
-            return mean_loss
-        else:
-            return per_example_losses
+        per_example_losses = self.mirrored_strategy.run(step_fn, args=(images, input_image_meta, 
+                                                                    input_rpn_match, input_rpn_bbox, 
+                                                                    input_gt_class_ids, input_gt_boxes, input_gt_masks))
+        mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
+        return mean_loss
     
-    # @tf.function
+    @tf.function
     def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 
         rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-                                        * rpn_class_loss_graph(*[input_rpn_match, rpn_class_logits]), keepdims=True)
+                                        * KL.Lambda(lambda x: rpn_class_loss_graph(*x))([input_rpn_match, rpn_class_logits]), keepdims=True)
         rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                        * rpn_bbox_loss_graph(self.config,*[input_rpn_bbox, input_rpn_match, rpn_bbox]), keepdims=True)
+                                        * KL.Lambda(lambda x: rpn_bbox_loss_graph(self.config,*x))([input_rpn_bbox, input_rpn_match, rpn_bbox]), keepdims=True)
         class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
-                                    * mrcnn_class_loss_graph(*[target_class_ids, mrcnn_class_logits, active_class_ids]), keepdims=True)
+                                    * KL.Lambda(lambda x: mrcnn_class_loss_graph(*x))([target_class_ids, mrcnn_class_logits, active_class_ids]), keepdims=True)
         bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
-                                    * mrcnn_bbox_loss_graph(*[target_bbox, target_class_ids, mrcnn_bbox]), keepdims=True)
+                                    * KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x))([target_bbox, target_class_ids, mrcnn_bbox]), keepdims=True)
         mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
-                                    * mrcnn_mask_loss_graph(*[target_mask, target_class_ids, mrcnn_mask]), keepdims=True)
+                                    * KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x))([target_mask, target_class_ids, mrcnn_mask]), keepdims=True)
         
         reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                                             for w in self.model.trainable_weights
@@ -184,6 +195,3 @@ class Trainer:
             return data_generator(dataset, self.config, shuffle=True, augmentation=augmentation, batch_size=self.config.BATCH_SIZE, no_augmentation_sources=no_augmentation_sources)
         else:
             return data_generator(dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
-    
-    def save(self):
-        self.model.save()

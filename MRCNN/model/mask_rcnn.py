@@ -55,6 +55,19 @@ class MaskRCNN(KM.Model):
         self.conv7 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")
         self.conv8 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")
 
+        self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
+
+        anchors = self.get_anchors(self.config.IMAGE_SHAPE)
+        # Duplicate across the batch dimension because Keras requires it
+        # TODO: can this be optimized to avoid duplicating the anchors?
+        anchors = tf.broadcast_to(anchors, (self.config.IMAGES_PER_GPU,) + anchors.shape)
+        # A hack to get around Keras's bad support for constants
+        self.anchors = AnchorsLayer(anchors, name='anchors')
+        # anchors = KL.Lambda(lambda x: anchLayer, name="anchors")(input_image)
+        # anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
+
+        self.detection_target = DetectionTargetLayer(self.config, name="proposal_targets")
+
     def call(self, input_image, 
                     input_image_meta=None, 
                     input_anchors=None, 
@@ -102,14 +115,7 @@ class MaskRCNN(KM.Model):
 
         # Anchors
         if training:
-            anchors = self.get_anchors(self.config.IMAGE_SHAPE)
-            # Duplicate across the batch dimension because Keras requires it
-            # TODO: can this be optimized to avoid duplicating the anchors?
-            anchors = tf.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
-            # A hack to get around Keras's bad support for constants
-            anchors = AnchorsLayer(anchors, name='anchors')(input_image)
-            # anchors = KL.Lambda(lambda x: anchLayer, name="anchors")(input_image)
-            # anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
+            anchors = self.anchors(input_image)
         else:
             anchors = input_anchors
 
@@ -122,10 +128,8 @@ class MaskRCNN(KM.Model):
         # Convert from list of lists of level outputs to list of lists
         # of outputs across levels.
         # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
-        output_names = ["rpn_class_logits", "rpn_class", "rpn_bbox"]
         outputs = list(zip(*layer_outputs))
-        outputs = [KL.Concatenate(axis=1, name=n)(list(o))
-                   for o, n in zip(outputs, output_names)]
+        outputs = [c(list(o)) for o, c in zip(outputs, self.concats)]
 
         rpn_class_logits, rpn_class, rpn_bbox = outputs
 
@@ -153,8 +157,7 @@ class MaskRCNN(KM.Model):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask =\
-                DetectionTargetLayer(self.config, name="proposal_targets")([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            rois, target_class_ids, target_bbox, target_mask = self.detection_target([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -251,7 +254,7 @@ class MaskRCNN(KM.Model):
         scores: [N] float probability scores for the class IDs
         masks: [H, W, N] instance binary masks
         """
-        assert len(images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
+        assert len(images) == self.config.IMAGES_PER_GPU, "len(images) must be equal to BATCH_SIZE"
 
         if verbose:
             log("Processing {} images".format(len(images)))
@@ -272,7 +275,7 @@ class MaskRCNN(KM.Model):
         anchors = self.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = tf.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        anchors = tf.broadcast_to(anchors, (self.config.IMAGES_PER_GPU,) + anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)
