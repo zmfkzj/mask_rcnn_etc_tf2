@@ -24,10 +24,11 @@ class Trainer:
         self.config = config
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
-        if os.name == 'nt':
-            cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
-        else:
-            cross_device_ops = tf.distribute.NcclAllReduce()
+        cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
+        # if os.name == 'nt':
+        #     cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
+        # else:
+        #     cross_device_ops = tf.distribute.NcclAllReduce()
 
         if isinstance(config.GPUS, int):
             self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'], cross_device_ops=cross_device_ops)
@@ -46,7 +47,7 @@ class Trainer:
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
-                                                                    ()))).prefetch(tf.data.AUTOTUNE))
+                                                                    ()))))
             self.optimizer = optimizer
 
         if val_dataset is not None:
@@ -59,7 +60,7 @@ class Trainer:
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
-                                                                    ()))).prefetch(tf.data.AUTOTUNE)
+                                                                    ())))
         else:
             self.val_dataset = None
         if test_dataset is not None:
@@ -156,7 +157,6 @@ class Trainer:
         mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
         return mean_loss
     
-    @tf.function
     def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 
