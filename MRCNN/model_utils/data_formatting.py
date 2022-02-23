@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 
 def compose_image_meta(image_id, original_image_shape, image_shape,
                        window, scale, active_class_ids):
@@ -79,7 +80,7 @@ def mold_image(images, config):
     the mean pixel and converts it to float. Expects image
     colors in RGB order.
     """
-    return images.astype(np.float32) - config.MEAN_PIXEL
+    return tf.cast(images,tf.float32) - config.MEAN_PIXEL
 
 
 def unmold_image(normalized_images, config):

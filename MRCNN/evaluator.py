@@ -1,16 +1,25 @@
+import tensorflow as tf
 import numpy as np
 import time
+from MRCNN.config import Config
 
 from MRCNN.data_loader import CocoDataset
+from MRCNN.data_generator import data_generator
 
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as maskUtils
 
 class Evaluator:
-    def __init__(self, model, dataset, tensorboard=None) -> None:
-        self.model = model
-        self.dataset = dataset
+    def __init__(self, model, dataset, config:Config=Config()) -> None:
+        dataset.prepare()
+        self.mirrored_strategy = config.MIRRORED_STRATEGY
+
+        with self.mirrored_strategy.scope():
+            self.model = model
+            self.dataset = self.mirrored_strategy.experimental_distribute_dataset(
+                                    tf.data.Dataset.from_generator(lambda : data_generator(dataset),
+                                                    output_types=(((tf.float32, tf.float64, tf.int32, tf.float64, tf.int32, tf.int32, tf.bool),()))).prefetch(tf.data.AUTOTUNE))
 
     def build_coco_results(self, image_ids, rois, class_ids, scores, masks):
         """Arrange resutls to match COCO specs in http://cocodataset.org/#format

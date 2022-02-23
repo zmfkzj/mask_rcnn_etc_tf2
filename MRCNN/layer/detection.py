@@ -1,5 +1,7 @@
 import tensorflow as tf
 import tensorflow.keras.layers as KL
+
+from MRCNN.config import Config
 from .proposal import apply_box_deltas_graph, clip_boxes_graph
 from ..model_utils.data_formatting import parse_image_meta_graph
 from ..model_utils.miscellenous_graph import norm_boxes_graph
@@ -23,7 +25,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     # Class IDs per ROI
     class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
     # Class probability of the top class of each ROI
-    indices = tf.stack([tf.range(probs.shape[0]), class_ids], axis=1)
+    indices = tf.stack([tf.range(tf.shape(probs)[0]), class_ids], axis=1)
     class_scores = tf.gather_nd(probs, indices)
     # Class-specific bounding box deltas
     deltas_specific = tf.gather_nd(deltas, indices)
@@ -112,7 +114,7 @@ class DetectionLayer(KL.Layer):
     coordinates are normalized.
     """
 
-    def __init__(self, config=None, **kwargs):
+    def __init__(self, config:Config=Config(), **kwargs):
         super(DetectionLayer, self).__init__(**kwargs)
         self.config = config
 
@@ -141,7 +143,7 @@ class DetectionLayer(KL.Layer):
         # normalized coordinates
         return tf.reshape(
             detections_batch,
-            [self.config.BATCH_SIZE, self.config.DETECTION_MAX_INSTANCES, 6])
+            [self.config.IMAGES_PER_GPU, self.config.DETECTION_MAX_INSTANCES, 6])
 
     def compute_output_shape(self, input_shape):
         return (None, self.config.DETECTION_MAX_INSTANCES, 6)

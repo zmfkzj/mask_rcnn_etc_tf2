@@ -3,14 +3,10 @@ import random
 import numpy as np
 import tensorflow as tf
 import scipy
-import skimage.color
-import skimage.io
-import skimage.transform
-from skimage.util import img_as_float
 import urllib.request
 import shutil
 import warnings
-from distutils.version import LooseVersion
+import skimage.transform
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -282,8 +278,7 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
 
     # Resize image using bilinear interpolation
     if scale != 1:
-        image = resize(image, (round(h * scale), round(w * scale)),
-                       preserve_range=True)
+        image = resize(image, (round(h * scale), round(w * scale)))
 
     # Need padding or cropping?
     if mode == "square":
@@ -327,7 +322,7 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
         window = (0, 0, min_dim, min_dim)
     else:
         raise Exception("Mode {} not supported".format(mode))
-    return image.astype(image_dtype), window, scale, padding, crop
+    return tf.cast(image,image_dtype), window, scale, padding, crop
 
 
 def resize_mask(mask, scale, padding, crop=None):
@@ -722,8 +717,7 @@ def denorm_boxes(boxes, shape):
     return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
 
 
-def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
-           preserve_range=False, anti_aliasing=False, anti_aliasing_sigma=None):
+def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
     """A wrapper for Scikit-Image resize().
 
     Scikit-Image generates warnings on every call to resize() if it doesn't
@@ -731,21 +725,14 @@ def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
-    return_type = image.dtype
-    imgf = img_as_float(image)
-    if LooseVersion(skimage.__version__) >= LooseVersion("0.14"):
-        # New in 0.14: anti_aliasing. Default it to False for backward
-        # compatibility with skimage 0.13.
-        return skimage.transform.resize(
-            imgf, output_shape,
-            order=order, mode=mode, cval=cval, clip=clip,
-            preserve_range=preserve_range, anti_aliasing=anti_aliasing,
-            anti_aliasing_sigma=anti_aliasing_sigma).astype(return_type)
+    if len(image.shape)==2:
+        image = tf.reshape(image, (*image.shape,1))
+        image = tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
+        image = tf.reshape(image, image.shape[:2])
+        return image
     else:
-        return skimage.transform.resize(
-            imgf, output_shape,
-            order=order, mode=mode, cval=cval, clip=clip,
-            preserve_range=preserve_range).astype(return_type)
+        return tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
+
 
 def log(text, array=None):
     """Prints a text message. And, optionally, if a Numpy array is provided it

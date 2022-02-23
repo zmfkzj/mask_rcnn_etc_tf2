@@ -4,7 +4,8 @@ import tensorflow.keras as keras
 from MRCNN.data_loader import CocoDataset
 from MRCNN.model.mask_rcnn import MaskRCNN
 from MRCNN.config import Config
-from MRCNN.train import Trainer
+from MRCNN.trainer import Trainer
+from MRCNN.detector import Detector
 
 class CustomConfig(Config):
     GPUS = 0,1
@@ -25,6 +26,12 @@ model = MaskRCNN(config)
 optimizer = keras.optimizers.SGD(learning_rate=config.LEARNING_RATE,
                                 momentum=config.LEARNING_MOMENTUM,
                                 decay=config.WEIGHT_DECAY)
-trainer = Trainer(model, train_dataset, config=config, optimizer=optimizer)
-trainer.train(50, 'all')
+# trainer = Trainer(model, train_dataset, config=config, optimizer=optimizer)
+# trainer.train(50, 'all')
+
+val_pathes = [val_dataset.image_info[id]['path'] for id in val_dataset.image_ids]
+val_pathes = [info['path'] for info in val_dataset.image_info]
+detector = Detector(model, config)
+detections = detector.detect(val_pathes, shuffle=True, limit_step=config.VALIDATION_STEPS)
+print(detections)
 
