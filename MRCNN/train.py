@@ -25,14 +25,9 @@ class Trainer:
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
 
         cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
-        # if os.name == 'nt':
-        #     cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
-        # else:
-        #     cross_device_ops = tf.distribute.NcclAllReduce()
-
+        
         if isinstance(config.GPUS, int):
             self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{config.GPUS}'], cross_device_ops=cross_device_ops)
-            # self.mirrored_strategy = tf.distribute.MirroredStrategy()
         else:
             self.mirrored_strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in config.GPUS], cross_device_ops=cross_device_ops)
         train_dataset = self.load_dataset(train_dataset,subset='train')
@@ -47,7 +42,7 @@ class Trainer:
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
-                                                                    ()))))
+                                                                    ()))).prefetch(tf.data.AUTOTUNE))
             self.optimizer = optimizer
 
         if val_dataset is not None:
@@ -60,11 +55,20 @@ class Trainer:
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
                                                                         tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
-                                                                    ())))
+                                                                    ()))).prefetch(tf.data.AUTOTUNE)
         else:
             self.val_dataset = None
         if test_dataset is not None:
-            self.test_dataset = self.load_dataset(test_dataset)
+            test_dataset = self.load_dataset(test_dataset)
+            self.test_dataset = tf.data.Dataset.from_generator(lambda : test_dataset, 
+                                                    output_signature=(((tf.TensorSpec(shape=(config.BATCH_SIZE,config.IMAGE_MAX_DIM,config.IMAGE_MAX_DIM,config.IMAGE_CHANNEL_COUNT), dtype=np.float32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,93), dtype=np.float64),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,261888, 1), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.RPN_TRAIN_ANCHORS_PER_IMAGE,4), dtype=np.float64),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,config.MAX_GT_INSTANCES,4), dtype=np.int32),
+                                                                        tf.TensorSpec(shape=(config.BATCH_SIZE,*config.MINI_MASK_SHAPE,config.MAX_GT_INSTANCES), dtype=np.bool)),
+                                                                    ()))).prefetch(tf.data.AUTOTUNE)
         else:
             self.test_dataset = None
 
@@ -95,7 +99,7 @@ class Trainer:
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
                 for i, (inputs, _) in enumerate(self.train_dataset):
-                    if self.config.STEPS_PER_EPOCH >= i:
+                    if self.config.STEPS_PER_EPOCH > i:
                         mean_loss = self.train_step(inputs)
                     else:
                         break
