@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-from MRCNN.dataset import Dataset
+from .dataset import Dataset
 from pycocotools.coco import COCO
 from pycocotools import mask as maskUtils
 

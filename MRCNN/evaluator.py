@@ -3,8 +3,8 @@ import numpy as np
 import time
 from MRCNN.config import Config
 
-from MRCNN.data_loader import CocoDataset
-from MRCNN.data_generator import data_generator
+from MRCNN.data.data_loader import CocoDataset
+from MRCNN.data.data_generator import data_generator
 
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval

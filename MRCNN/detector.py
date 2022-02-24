@@ -35,7 +35,7 @@ class Detector:
                                     .batch(self.config.BATCH_SIZE).take(limit_step).prefetch(tf.data.AUTOTUNE)
 
         all_detections = []
-        pbar = tqdm(unit='step', total = self.config.VALIDATION_STEPS)
+        pbar = tqdm(unit='step', total = limit_step)
         with self.mirrored_strategy.scope():
             mold_things = self.mirrored_strategy.experimental_distribute_dataset(mold_things)
             for i, dist_things in enumerate(mold_things):
@@ -43,16 +43,22 @@ class Detector:
                 all_detections.extend(batch_detections)
                 pbar.update()
         
+        for detect in all_detections:
+            detect['path'] = detect['path'].numpy().decode('utf-8')
+            detect['rois'] = detect['rois'].numpy()
+            detect['class_ids'] = detect['class_ids'].numpy()
+            detect['scores'] = detect['scores'].numpy()
+            detect['masks'] = detect['masks'].numpy()
+
         return all_detections
 
-    @tf.function
+    # @tf.function
     def batch_detect(self, dist_things):
         per_detections = self.mirrored_strategy.run(self.step_fn, args=(*dist_things,))
         batch_detections = self.mirrored_strategy.gather(per_detections, axis=None)
         return batch_detections
 
     def step_fn(self, pathes, image_shapes, molded_images, image_metas, windows):
-
         # Validate image sizes
         # All images in a batch MUST be of the same size
         image_shape = molded_images[0].shape
@@ -77,7 +83,7 @@ class Detector:
             shape = image_shapes[i]
             final_rois, final_class_ids, final_scores, final_masks =\
                 self.unmold_detections(detections[i], mrcnn_mask[i],
-                                    shape, molded_images[i].shape,
+                                    shape, tf.shape(molded_images[i]),
                                     windows[i])
             results.append({
                 "path": path,
@@ -136,40 +142,45 @@ class Detector:
         """
         # How many detections do we have?
         # Detections array is padded with zeros. Find the first class_id == 0.
-        detections = tf.make_ndarray(tf.make_tensor_proto(detections))
-        zero_ix = np.where(detections[:, 4] == 0)[0]
-        N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+        # detections = tf.make_ndarray(tf.make_tensor_proto(detections))
+        zero_ix = tf.where(detections[:, 4] == 0)[:,0]
+        N = tf.cast(zero_ix[0], tf.int32) if tf.shape(zero_ix)[0] > 0 else tf.shape(detections)[0]
 
         # Extract boxes, class_ids, scores, and class-specific masks
         boxes = detections[:N, :4]
         class_ids = tf.cast(detections[:N, 4],np.int32)
         scores = detections[:N, 5]
-        mrcnn_mask = tf.make_ndarray(tf.make_tensor_proto(mrcnn_mask))
-        masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+        mrcnn_mask = tf.transpose(mrcnn_mask,[0,3,1,2])
+        indices = tf.transpose([tf.range(N),class_ids])
+        masks = tf.gather_nd(mrcnn_mask,indices)
 
         # Translate normalized coordinates in the resized image to pixel
         # coordinates in the original image before resizing
         window = utils.norm_boxes(window, image_shape[:2])
-        wy1, wx1, wy2, wx2 = window
-        shift = np.array([wy1, wx1, wy1, wx1])
+        wy1 = window[0]
+        wx1 = window[1]
+        wy2 = window[2]
+        wx2 = window[3]
+        shift = tf.stack([wy1, wx1, wy1, wx1])
+        # shift = tf.gather(window, [0,1,0,1])
         wh = wy2 - wy1  # window height
         ww = wx2 - wx1  # window width
-        scale = np.array([wh, ww, wh, ww])
+        scale = tf.stack([wh, ww, wh, ww])
         # Convert boxes to normalized coordinates on the window
-        boxes = np.divide(boxes - shift, scale)
+        boxes = tf.divide(boxes - shift, scale)
         # Convert boxes to pixel coordinates on the original image
         boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
 
         # Filter out detections with zero area. Happens in early training when
         # network weights are still random
-        exclude_ix = np.where(
-            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
-        if exclude_ix.shape[0] > 0:
-            boxes = np.delete(boxes, exclude_ix, axis=0)
-            class_ids = np.delete(class_ids, exclude_ix, axis=0)
-            scores = np.delete(scores, exclude_ix, axis=0)
-            masks = np.delete(masks, exclude_ix, axis=0)
-            N = class_ids.shape[0]
+        include_ix = tf.where(
+            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) > 0)[:,0]
+        if tf.shape(include_ix)[0] > 0:
+            boxes = tf.gather(boxes, include_ix, axis=0)
+            class_ids = tf.gather(class_ids, include_ix, axis=0)
+            scores = tf.gather(scores, include_ix, axis=0)
+            masks = tf.gather(masks, include_ix, axis=0)
+            N = tf.shape(class_ids)[0]
 
         # Resize masks to original image size and set boundary threshold.
         full_masks = []
@@ -177,8 +188,8 @@ class Detector:
             # Convert neural network mask to full size mask
             full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
             full_masks.append(full_mask)
-        full_masks = np.stack(full_masks, axis=-1)\
-            if full_masks else np.empty(original_image_shape[:2] + (0,))
+        full_masks = tf.stack(full_masks, axis=-1)\
+            if full_masks else tf.zeros(tf.concat([original_image_shape[:2],0]),tf.bool)
 
         return boxes, class_ids, scores, full_masks
 

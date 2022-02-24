@@ -7,7 +7,7 @@ from tqdm import tqdm
 from MRCNN.model.mask_rcnn import MaskRCNN
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
-from MRCNN.data_generator import data_generator
+from MRCNN.data.data_generator import data_generator
 from MRCNN.layer.roialign import parse_image_meta_graph
 from MRCNN.evaluator import Evaluator
 

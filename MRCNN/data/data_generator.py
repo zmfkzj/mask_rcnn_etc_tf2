@@ -3,7 +3,7 @@ import logging
 import numpy as np
 
 from MRCNN import utils
-from .model_utils.data_formatting import compose_image_meta, mold_image
+from ..model_utils.data_formatting import compose_image_meta, mold_image
 
 
 def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,

@@ -399,13 +399,20 @@ def unmold_mask(mask, bbox, image_shape):
     Returns a binary mask with the same size as the original image.
     """
     threshold = 0.5
-    y1, x1, y2, x2 = bbox
+    y1 = bbox[0]
+    x1 = bbox[1]
+    y2 = bbox[2]
+    x2 = bbox[3]
     mask = resize(mask, (y2 - y1, x2 - x1))
-    mask = np.where(mask >= threshold, 1, 0).astype(np.bool)
+    mask = tf.cast(tf.where(mask >= threshold, 1, 0),tf.bool)
 
     # Put the mask in the right location.
     full_mask = np.zeros(image_shape[:2], dtype=np.bool)
-    full_mask[y1:y2, x1:x2] = mask
+    # ys,xs = tf.meshgrid(tf.range(y1,y2), tf.range(x1,x2))
+    # indices = tf.transpose([tf.reshape(ys,(-1,)), tf.reshape(xs,(-1,))])
+    # updates = tf.reshape(mask, (-1,))
+    # full_mask = tf.tensor_scatter_nd_update(full_mask, indices, updates)
+    full_mask[y1:y2, x1:x2] = mask.numpy()
     return full_mask
 
 
@@ -694,10 +701,11 @@ def norm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in normalized coordinates
     """
-    h, w = shape
-    scale = np.array([h - 1, w - 1, h - 1, w - 1])
-    shift = np.array([0, 0, 1, 1])
-    return np.divide((boxes - shift), scale).astype(np.float32)
+    h = shape[1]
+    w = shape[1]
+    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.int32)
+    shift = tf.constant([0, 0, 1, 1], tf.int32)
+    return tf.cast(tf.divide((boxes - shift), scale),tf.float32)
 
 
 def denorm_boxes(boxes, shape):
@@ -711,10 +719,11 @@ def denorm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in pixel coordinates
     """
-    h, w = shape
-    scale = np.array([h - 1, w - 1, h - 1, w - 1])
-    shift = np.array([0, 0, 1, 1])
-    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
+    h = shape[0]
+    w = shape[1]
+    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]),tf.float32)
+    shift = tf.constant([0, 0, 1, 1], tf.float32)
+    return tf.cast(tf.math.round(tf.multiply(boxes, scale) + shift),tf.int32)
 
 
 def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
@@ -725,10 +734,10 @@ def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_alia
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
-    if len(image.shape)==2:
-        image = tf.reshape(image, (*image.shape,1))
+    if len(tf.shape(image))==2:
+        image = tf.reshape(image, (tf.shape(image)[0],tf.shape(image)[1],1))
         image = tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
-        image = tf.reshape(image, image.shape[:2])
+        image = tf.reshape(image, tf.shape(image)[:2])
         return image
     else:
         return tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
