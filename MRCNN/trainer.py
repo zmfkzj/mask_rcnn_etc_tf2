@@ -13,7 +13,7 @@ from MRCNN.evaluator import Evaluator
 
 
 class Trainer:
-    def __init__(self, model:MaskRCNN, dataset, 
+    def __init__(self, model:MaskRCNN, dataset, ckpt_mng:tf.train.CheckpointManager,
                         val_evaluator:Evaluator = None, test_evaluator:Evaluator = None,
                         optimizer = keras.optimizers.SGD(),
                         config:Config = Config(),
@@ -23,6 +23,7 @@ class Trainer:
         self.config = config
         self.val_evaluator = val_evaluator
         self.test_evaluator = test_evaluator
+        self.ckpt_mng = ckpt_mng
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
@@ -54,10 +55,6 @@ class Trainer:
             layers = layer_regex[layers]
 
         self.model.set_trainable(layers)
-        
-        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
-        manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
-        status = ckpt.restore(manager.latest_checkpoint)
 
         for epoch in range(max_epoch):
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
@@ -71,7 +68,7 @@ class Trainer:
                     pbar.update()
                     pbar.set_postfix({'mean_loss':mean_loss.numpy()})
             pbar.close()
-            manager.save()
+            self.ckpt_mng.save()
 
     @tf.function
     def train_step(self, dist_inputs):

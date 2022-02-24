@@ -408,10 +408,6 @@ def unmold_mask(mask, bbox, image_shape):
 
     # Put the mask in the right location.
     full_mask = np.zeros(image_shape[:2], dtype=np.bool)
-    # ys,xs = tf.meshgrid(tf.range(y1,y2), tf.range(x1,x2))
-    # indices = tf.transpose([tf.reshape(ys,(-1,)), tf.reshape(xs,(-1,))])
-    # updates = tf.reshape(mask, (-1,))
-    # full_mask = tf.tensor_scatter_nd_update(full_mask, indices, updates)
     full_mask[y1:y2, x1:x2] = mask.numpy()
     return full_mask
 

@@ -26,7 +26,12 @@ model = MaskRCNN(config)
 optimizer = keras.optimizers.SGD(learning_rate=config.LEARNING_RATE,
                                 momentum=config.LEARNING_MOMENTUM,
                                 decay=config.WEIGHT_DECAY)
-# trainer = Trainer(model, train_dataset, config=config, optimizer=optimizer)
+
+ckpt = tf.train.Checkpoint(optimizer=optimizer, model=model)
+manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+# status = ckpt.restore(manager.latest_checkpoint)
+status = ckpt.restore('save_model/ckpt-50')
+# trainer = Trainer(model, train_dataset, manager, config=config, optimizer=optimizer)
 # trainer.train(50, 'all')
 
 val_pathes = [val_dataset.image_info[id]['path'] for id in val_dataset.image_ids]
