@@ -1,7 +1,7 @@
 import tensorflow as tf
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
-from ..layer.roialign import PyramidROIAlign
+from ..layer import PyramidROIAlign
 
 class FPN_classifier(KM.Model):
     def __init__(self, pool_size, num_classes, fc_layers_size=1024):

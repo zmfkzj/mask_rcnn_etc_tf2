@@ -6,13 +6,8 @@ import numpy as np
 
 from MRCNN import utils
 from MRCNN.config import Config
-from .resnet import Resnet
-from .fpn_head import FPN_classifier, FPN_mask
-from .rpn import RPN
-from ..layer.detection import DetectionLayer
-from ..layer.detection_target import DetectionTargetLayer
-from ..layer.proposal import ProposalLayer
-from ..layer.anchors import AnchorsLayer
+from . import Resnet, FPN_classifier, FPN_mask, RPN
+from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, AnchorsLayer
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..utils import log, compute_backbone_shapes
 

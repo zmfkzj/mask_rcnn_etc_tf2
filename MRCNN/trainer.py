@@ -4,17 +4,16 @@ import tensorflow.keras.layers as KL
 
 from tqdm import tqdm
 
-from MRCNN.model.mask_rcnn import MaskRCNN
+from .evaluator import Evaluator
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.data.data_generator import data_generator
 from MRCNN.layer.roialign import parse_image_meta_graph
-from MRCNN.evaluator import Evaluator
 
 
 class Trainer:
-    def __init__(self, model:MaskRCNN, dataset, ckpt_mng:tf.train.CheckpointManager,
-                        val_evaluator:Evaluator = None, test_evaluator:Evaluator = None,
+    def __init__(self, model, dataset, ckpt_mng:tf.train.CheckpointManager,
+                        val_evaluator:Evaluator = None,
                         optimizer = keras.optimizers.SGD(),
                         config:Config = Config(),
                         augment = False,
@@ -22,7 +21,6 @@ class Trainer:
                         logs_dir='logs/'):
         self.config = config
         self.val_evaluator = val_evaluator
-        self.test_evaluator = test_evaluator
         self.ckpt_mng = ckpt_mng
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)

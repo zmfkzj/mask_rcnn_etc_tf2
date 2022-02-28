@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras.layers as KL
-from MRCNN import utils
 from ..model_utils.data_formatting import parse_image_meta_graph
 
 def log2_graph(x):

@@ -1,24 +1,25 @@
+import os
 import random
 import tensorflow as tf
-import tensorflow.keras as keras
 import numpy as np
 
 from MRCNN import utils
 from MRCNN.config import Config
-from MRCNN.model.mask_rcnn import MaskRCNN
 from MRCNN.model_utils.data_formatting import mold_image, compose_image_meta
 
 from tqdm import tqdm
+from pathlib import Path
 
 class Detector:
-    def __init__(self, model:MaskRCNN, config:Config=Config()) -> None:
+    def __init__(self, model, classes:dict, config:Config=Config(), ) -> None:
         self.mirrored_strategy = config.MIRRORED_STRATEGY
         self.config = config
+        self.classes = classes
 
         with self.mirrored_strategy.scope():
             self.model = model
     
-    def detect(self, image_pathes, shuffle=False, limit_step=-1):
+    def detect(self, image_dir, shuffle=False, limit_step=-1):
         """Runs the detection pipeline.
 
         image_pathes: List of pathes, potentially of different sizes.
@@ -29,33 +30,41 @@ class Detector:
         scores: [N] float probability scores for the class IDs
         masks: [H, W, N] instance binary masks
         """
+        image_pathes = []
+        for r,_,fs in os.walk(image_dir):
+            for f in fs:
+                if Path(f).suffix.lower() in ['.jpg', '.jpeg','.png']:
+                    full_path = Path(r)/f
+                    image_pathes.append(str(full_path))
 
         things_gen = self.image_generator(image_pathes,shuffle)
         mold_things = tf.data.Dataset.from_generator(lambda : things_gen, output_types=(tf.string, tf.int32, tf.float32, tf.float64, tf.int32))\
                                     .batch(self.config.BATCH_SIZE).take(limit_step).prefetch(tf.data.AUTOTUNE)
 
-        all_detections = []
+        results = []
         pbar = tqdm(unit='step', total = limit_step)
         with self.mirrored_strategy.scope():
             mold_things = self.mirrored_strategy.experimental_distribute_dataset(mold_things)
-            for i, dist_things in enumerate(mold_things):
-                batch_detections = self.batch_detect(dist_things)
-                all_detections.extend(batch_detections)
+            for dist_things in mold_things:
+                pathes, image_shapes, molded_images, image_metas, windows = dist_things
+                batch_detections, batch_mrcnn_mask = self.batch_detect(dist_things)
+
+                #post-procecc
+                post_detections = self.mirrored_strategy.run(self.post_proceccing, 
+                                                            args=(pathes, image_shapes, batch_detections, batch_mrcnn_mask, molded_images ,windows))
+                post_detections = self.mirrored_strategy.gather(post_detections, axis=None)
+                results.extend(post_detections)
+
                 pbar.update()
-        
-        for detect in all_detections:
-            detect['path'] = detect['path'].numpy().decode('utf-8')
-            detect['rois'] = detect['rois'].numpy()
-            detect['class_ids'] = detect['class_ids'].numpy()
-            detect['scores'] = detect['scores'].numpy()
-            detect['masks'] = detect['masks'].numpy()
 
-        return all_detections
+        for r in results:
+            r['path'] = str(Path(r['path']).relative_to(image_dir))
+        return results
 
-    # @tf.function
+    @tf.function
     def batch_detect(self, dist_things):
-        per_detections = self.mirrored_strategy.run(self.step_fn, args=(*dist_things,))
-        batch_detections = self.mirrored_strategy.gather(per_detections, axis=None)
+        batch_detections = self.mirrored_strategy.run(self.step_fn, args=(*dist_things,))
+        # batch_detections = self.mirrored_strategy.gather(per_detections, axis=None)
         return batch_detections
 
     def step_fn(self, pathes, image_shapes, molded_images, image_metas, windows):
@@ -75,24 +84,7 @@ class Detector:
         # Run object detection
         detections, _, _, mrcnn_mask, _, _, _ =\
             self.model(molded_images, image_metas, anchors, training=False)
-        # Process detections
-        results = []
-        
-        for i in range(len(pathes)):
-            path = pathes[i]
-            shape = image_shapes[i]
-            final_rois, final_class_ids, final_scores, final_masks =\
-                self.unmold_detections(detections[i], mrcnn_mask[i],
-                                    shape, tf.shape(molded_images[i]),
-                                    windows[i])
-            results.append({
-                "path": path,
-                "rois": final_rois,
-                "class_ids": final_class_ids,
-                "scores": final_scores,
-                "masks": final_masks,
-            })
-        return results
+        return detections, mrcnn_mask
 
     def mold_inputs(self, image):
         """Takes a list of images and modifies them to the format expected
@@ -205,3 +197,22 @@ class Detector:
             # Mold inputs to format expected by the neural network
             molded_image, image_meta, window = self.mold_inputs(image)
             yield path, image.shape, molded_image, image_meta, window
+
+    def post_proceccing(self,pathes, image_shapes, detections, mrcnn_mask, molded_images ,windows):
+        results = []
+        # Post-Process
+        for i in range(len(pathes)):
+            path = pathes[i]
+            shape = image_shapes[i]
+            final_rois, final_class_ids, final_scores, final_masks =\
+                self.unmold_detections(detections[i], mrcnn_mask[i],
+                                    shape, tf.shape(molded_images[i]),
+                                    windows[i])
+            results.append({
+                "path": path.numpy().decode('utf-8'),
+                "rois": final_rois.numpy(), # x1,y1,x2,y2
+                "classes": [self.classes[id] for id in final_class_ids.numpy()],
+                "scores": final_scores.numpy(),
+                "masks": final_masks.numpy(),
+            })
+        return results
