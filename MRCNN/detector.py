@@ -11,7 +11,7 @@ from tqdm import tqdm
 from pathlib import Path
 
 class Detector:
-    def __init__(self, model, classes:dict, config:Config=Config(), ) -> None:
+    def __init__(self, model, classes:list, config:Config=Config(), ) -> None:
         self.mirrored_strategy = config.MIRRORED_STRATEGY
         self.config = config
         self.classes = classes
@@ -200,7 +200,6 @@ class Detector:
 
     def post_proceccing(self,pathes, image_shapes, detections, mrcnn_mask, molded_images ,windows):
         results = []
-        # Post-Process
         for i in range(len(pathes)):
             path = pathes[i]
             shape = image_shapes[i]
@@ -212,7 +211,8 @@ class Detector:
                 "path": path.numpy().decode('utf-8'),
                 "rois": final_rois.numpy(), # x1,y1,x2,y2
                 "classes": [self.classes[id] for id in final_class_ids.numpy()],
+                "class_ids": final_class_ids.numpy(),
                 "scores": final_scores.numpy(),
-                "masks": final_masks.numpy(),
+                "masks": final_masks.numpy().astype(np.uint8),
             })
         return results

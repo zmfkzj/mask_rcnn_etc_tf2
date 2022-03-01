@@ -40,6 +40,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         min_scale=config.IMAGE_MIN_SCALE,
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
+    image = image.numpy()
     mask = utils.resize_mask(mask, scale, padding, crop)
 
     # Random horizontal flips.

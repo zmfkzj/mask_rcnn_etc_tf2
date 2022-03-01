@@ -18,7 +18,7 @@ train_dataset.load_coco('d:/coco/train2017/', 'd:/coco/annotations/instances_tra
 config = CustomConfig()
 model = MaskRCNN(config)
 
-lr_schedule = keras.optimizers.schedules.ExponentialDecay(config.LEARNING_RATE, 50000, 0.96, staircase=True)
+lr_schedule = keras.optimizers.schedules.ExponentialDecay(config.LEARNING_RATE, 5000, 0.96, staircase=True)
 
 optimizer = keras.optimizers.SGD(learning_rate=lr_schedule,
                                 momentum=config.LEARNING_MOMENTUM)
@@ -30,6 +30,9 @@ status = ckpt.restore(manager.latest_checkpoint)
 val_evaluator = Evaluator(model, 'd:/coco/val2017/', 'd:/coco/annotations/instances_val2017.json',config)
 trainer = Trainer(model, train_dataset, manager, config=config, optimizer=optimizer, val_evaluator=val_evaluator)
 trainer.train(300, 'all')
+
+metric = val_evaluator.eval('d:/')
+print(metric)
 
 # classes = [info['name'] for info in train_dataset.class_info]
 # detector = Detector(model, classes, config)

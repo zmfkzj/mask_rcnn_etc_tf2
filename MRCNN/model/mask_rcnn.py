@@ -58,8 +58,6 @@ class MaskRCNN(KM.Model):
         anchors = tf.broadcast_to(anchors, (self.config.IMAGES_PER_GPU,) + anchors.shape)
         # A hack to get around Keras's bad support for constants
         self.anchors = AnchorsLayer(anchors, name='anchors')
-        # anchors = KL.Lambda(lambda x: anchLayer, name="anchors")(input_image)
-        # anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
 
         self.detection_target = DetectionTargetLayer(self.config, name="proposal_targets")
 

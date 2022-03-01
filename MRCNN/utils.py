@@ -349,17 +349,17 @@ def minimize_mask(bbox, mask, mini_shape):
 
     See inspect_data.ipynb notebook for more details.
     """
-    mini_mask = np.zeros(mini_shape + (mask.shape[-1],), dtype=bool)
-    for i in range(mask.shape[-1]):
+    mini_mask = tf.zeros(tf.concat([mini_shape,(tf.shape(mask)[-1],)],-1), dtype=tf.bool).numpy()
+    for i in range(tf.shape(mask)[-1]):
         # Pick slice and cast to bool in case load_mask() returned wrong dtype
-        m = mask[:, :, i].astype(bool)
+        m = mask[:, :, i].astype(np.bool)
         y1, x1, y2, x2 = bbox[i][:4]
         m = m[y1:y2, x1:x2]
         if m.size == 0:
             raise Exception("Invalid bounding box with area of zero")
         # Resize with bilinear interpolation
         m = resize(m, mini_shape)
-        mini_mask[:, :, i] = np.around(m).astype(np.bool)
+        mini_mask[:, :, i] = tf.cast(tf.round(m),tf.bool).numpy()
     return mini_mask
 
 
@@ -718,7 +718,7 @@ def denorm_boxes(boxes, shape):
     return tf.cast(tf.math.round(tf.multiply(boxes, scale) + shift),tf.int32)
 
 
-def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
+def resize(image:tf.Tensor, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
     """A wrapper for Scikit-Image resize().
 
     Scikit-Image generates warnings on every call to resize() if it doesn't
@@ -726,13 +726,21 @@ def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_alia
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
-    if len(tf.shape(image))==2:
-        image = tf.reshape(image, (tf.shape(image)[0],tf.shape(image)[1],1))
-        image = tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
-        image = tf.reshape(image, tf.shape(image)[:2])
-        return image
+    def _resize(image):
+        if len(tf.shape(image))==2:
+            image = tf.reshape(image, (tf.shape(image)[0],tf.shape(image)[1],1))
+            image = tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
+            image = tf.reshape(image, tf.shape(image)[:2])
+            return image
+        else:
+            return tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
+
+    if image.dtype==tf.bool:
+        image = tf.cast(image,tf.float32)
+        return _resize(image)
     else:
-        return tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
+        return _resize(image)
+
 
 
 def log(text, array=None):
