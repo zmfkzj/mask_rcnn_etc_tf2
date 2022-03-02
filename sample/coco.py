@@ -10,7 +10,7 @@ class CustomConfig(Config):
     # GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.001
-    IMAGES_PER_GPU = 3
+    IMAGES_PER_GPU = 4
 
 train_dataset = CocoDataset()
 train_dataset.load_coco('d:/coco/train2017/', 'd:/coco/annotations/instances_train2017.json')
@@ -18,7 +18,7 @@ train_dataset.load_coco('d:/coco/train2017/', 'd:/coco/annotations/instances_tra
 config = CustomConfig()
 model = MaskRCNN(config)
 
-lr_schedule = keras.optimizers.schedules.ExponentialDecay(config.LEARNING_RATE, 5000, 0.96, staircase=True)
+lr_schedule = keras.optimizers.schedules.ExponentialDecay(config.LEARNING_RATE/config.STEPS_PER_EPOCH, 5000, 0.96, staircase=True)
 
 optimizer = keras.optimizers.SGD(learning_rate=lr_schedule,
                                 momentum=config.LEARNING_MOMENTUM)

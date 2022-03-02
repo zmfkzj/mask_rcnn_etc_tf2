@@ -15,14 +15,14 @@ def compose_image_meta(image_id, original_image_shape, image_shape,
         the image came. Useful if training on images from multiple datasets
         where not all classes are present in all datasets.
     """
-    meta = np.array(
-        [image_id] +                  # size=1
-        list(original_image_shape) +  # size=3
-        list(image_shape) +           # size=3
-        list(window) +                # size=4 (y1, x1, y2, x2) in image cooredinates
-        [scale] +                     # size=1
-        list(active_class_ids)        # size=num_classes
-    )
+    meta = tf.concat([
+        tf.cast(tf.constant([image_id]),dtype=tf.float32),             # size=1
+        tf.cast(original_image_shape,dtype=tf.float32),   # size=3
+        tf.cast(image_shape,dtype=tf.float32),            # size=3
+        tf.cast(window,dtype=tf.float32),                 # size=4 (y1, x1, y2, x2) in image cooredinates
+        tf.cast([scale],dtype=tf.float32),                # size=1
+        tf.cast(tf.constant(active_class_ids),dtype=tf.float32)]       # size=num_classes
+    ,-1)
     return meta
 
 

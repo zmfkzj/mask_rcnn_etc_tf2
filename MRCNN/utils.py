@@ -248,47 +248,52 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
     padding: Padding added to the image [(top, bottom), (left, right), (0, 0)]
     """
     # Keep track of image dtype and return results in the same dtype
-    image_dtype = image.dtype
     # Default window (y1, x1, y2, x2) and default scale == 1.
-    h, w = image.shape[:2]
-    window = (0, 0, h, w)
-    scale = 1
-    padding = [(0, 0), (0, 0), (0, 0)]
+    h = tf.shape(image)[0]
+    w = tf.shape(image)[1]
+    window = tf.cast(tf.stack((0, 0, h, w)), tf.float32)
+    scale = 1.
+    padding = tf.constant([(0, 0), (0, 0), (0, 0)], tf.float32)
     crop = None
 
     if mode == "none":
         return image, window, scale, padding, crop
 
     # Scale?
-    if min_dim:
-        # Scale up but not down
-        scale = max(1, min_dim / min(h, w))
-    if min_scale and scale < min_scale:
-        scale = min_scale
+    scale = tf.cond(tf.cast(min_dim,tf.bool),
+                    lambda :tf.math.maximum(1., tf.cast(min_dim / tf.math.minimum(h, w),tf.float32)),
+                    lambda : scale)
+    scale = tf.cond(tf.reduce_all([tf.cast(min_scale,tf.bool), scale < min_scale]),
+                    lambda: tf.cast(min_scale, tf.float32),
+                    lambda:scale)
 
     # Does it exceed max dim?
     if max_dim and mode == "square":
-        image_max = max(h, w)
-        if round(image_max * scale) > max_dim:
-            scale = max_dim / image_max
+        image_max = tf.math.maximum(h, w)
+        scale = tf.cond(tf.math.round(tf.cast(image_max,tf.float32) * scale) > max_dim, 
+                        lambda : tf.cast(max_dim / image_max, tf.float32), 
+                        lambda : scale)
 
     # Resize image using bilinear interpolation
-    if scale != 1:
-        image = resize(image, (round(h * scale), round(w * scale)))
+    image = tf.cond(scale != 1., 
+                    lambda : resize(image, (tf.math.round(tf.cast(h,tf.float32) * scale), tf.math.round(tf.cast(w,tf.float32) * scale))), 
+                    lambda: tf.cast(image,tf.float32))
 
     # Need padding or cropping?
     if mode == "square":
         # Get new height and width
-        h, w = image.shape[:2]
+        h = tf.shape(image)[0]
+        w = tf.shape(image)[1]
         top_pad = (max_dim - h) // 2
         bottom_pad = max_dim - h - top_pad
         left_pad = (max_dim - w) // 2
         right_pad = max_dim - w - left_pad
-        padding = [(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)]
-        image = np.pad(image, padding, mode='constant', constant_values=0)
-        window = (top_pad, left_pad, h + top_pad, w + left_pad)
+        padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
+        image = tf.pad(image, padding, mode='CONSTANT', constant_values=0)
+        window = tf.cast(tf.stack((top_pad, left_pad, h + top_pad, w + left_pad)), tf.float32)
     elif mode == "pad64":
-        h, w = image.shape[:2]
+        h = tf.shape(image)[0]
+        w = tf.shape(image)[1]
         # Both sides must be divisible by 64
         assert min_dim % 64 == 0, "Minimum dimension must be a multiple of 64"
         # Height
@@ -305,20 +310,21 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
             right_pad = max_w - w - left_pad
         else:
             left_pad = right_pad = 0
-        padding = [(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)]
-        image = np.pad(image, padding, mode='constant', constant_values=0)
-        window = (top_pad, left_pad, h + top_pad, w + left_pad)
+        padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
+        image = tf.pad(image, padding, mode='CONSTANT', constant_values=0)
+        window = tf.cast(tf.stack((top_pad, left_pad, h + top_pad, w + left_pad)), tf.float32)
     elif mode == "crop":
         # Pick a random crop
-        h, w = image.shape[:2]
+        h = tf.shape(image)[0]
+        w = tf.shape(image)[1]
         y = random.randint(0, (h - min_dim))
         x = random.randint(0, (w - min_dim))
         crop = (y, x, min_dim, min_dim)
         image = image[y:y + min_dim, x:x + min_dim]
-        window = (0, 0, min_dim, min_dim)
+        window = tf.cast(tf.stack((0, 0, min_dim, min_dim)), tf.float32)
     else:
         raise Exception("Mode {} not supported".format(mode))
-    return tf.cast(image,image_dtype), window, scale, padding, crop
+    return tf.cast(image,tf.float32), window, scale, padding, crop
 
 
 def resize_mask(mask, scale, padding, crop=None):
@@ -332,13 +338,15 @@ def resize_mask(mask, scale, padding, crop=None):
     """
     # Suppress warning from scipy 0.13.0, the output shape of zoom() is
     # calculated with round() instead of int()
+    scale = scale.numpy()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
     if crop is not None:
-        y, x, h, w = crop
+        y, x, h, w = crop.numpy()
         mask = mask[y:y + h, x:x + w]
     else:
+        padding = padding.numpy()
         mask = np.pad(mask, padding, mode='constant', constant_values=0)
     return mask
 
@@ -423,30 +431,31 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
         value is 2 then generate anchors for every other feature map pixel.
     """
     # Get all combinations of scales and ratios
-    scales, ratios = np.meshgrid(np.array(scales), np.array(ratios))
-    scales = scales.flatten()
-    ratios = ratios.flatten()
+    scales = tf.cast(scales, tf.float32)
+    scales, ratios = tf.meshgrid(scales, ratios)
+    scales = tf.reshape(scales, [-1])
+    ratios = tf.reshape(ratios, [-1])
 
     # Enumerate heights and widths from scales and ratios
-    heights = scales / np.sqrt(ratios)
-    widths = scales * np.sqrt(ratios)
+    heights = scales / tf.sqrt(ratios)
+    widths = scales * tf.sqrt(ratios)
 
     # Enumerate shifts in feature space
-    shifts_y = np.arange(0, shape[0], anchor_stride) * feature_stride
-    shifts_x = np.arange(0, shape[1], anchor_stride) * feature_stride
-    shifts_x, shifts_y = np.meshgrid(shifts_x, shifts_y)
+    shifts_y = tf.cast(tf.range(0, shape[0], anchor_stride) * feature_stride,tf.float32)
+    shifts_x = tf.cast(tf.range(0, shape[1], anchor_stride) * feature_stride,tf.float32)
+    shifts_x, shifts_y = tf.meshgrid(shifts_x, shifts_y)
 
     # Enumerate combinations of shifts, widths, and heights
-    box_widths, box_centers_x = np.meshgrid(widths, shifts_x)
-    box_heights, box_centers_y = np.meshgrid(heights, shifts_y)
+    box_widths, box_centers_x = tf.meshgrid(widths, shifts_x)
+    box_heights, box_centers_y = tf.meshgrid(heights, shifts_y)
 
     # Reshape to get a list of (y, x) and a list of (h, w)
-    box_centers = np.stack(
-        [box_centers_y, box_centers_x], axis=2).reshape([-1, 2])
-    box_sizes = np.stack([box_heights, box_widths], axis=2).reshape([-1, 2])
+    box_centers = tf.reshape(tf.stack(
+        [box_centers_y, box_centers_x], axis=2),[-1, 2])
+    box_sizes = tf.reshape(tf.stack([box_heights, box_widths], axis=2),[-1, 2])
 
     # Convert to corner coordinates (y1, x1, y2, x2)
-    boxes = np.concatenate([box_centers - 0.5 * box_sizes,
+    boxes = tf.concat([box_centers - 0.5 * box_sizes,
                             box_centers + 0.5 * box_sizes], axis=1)
     return boxes
 
@@ -468,7 +477,7 @@ def generate_pyramid_anchors(scales, ratios, feature_shapes, feature_strides,
     for i in range(len(scales)):
         anchors.append(generate_anchors(scales[i], ratios, feature_shapes[i],
                                         feature_strides[i], anchor_stride))
-    return np.concatenate(anchors, axis=0)
+    return tf.concat(anchors, axis=0)
 
 
 ############################################################
@@ -668,20 +677,6 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
 
     return result
 
-
-def download_trained_weights(coco_model_path, verbose=1):
-    """Download COCO trained weights from Releases.
-
-    coco_model_path: local path of COCO trained weights
-    """
-    if verbose > 0:
-        print("Downloading pretrained model to " + coco_model_path + " ...")
-    with urllib.request.urlopen(COCO_MODEL_URL) as resp, open(coco_model_path, 'wb') as out:
-        shutil.copyfileobj(resp, out)
-    if verbose > 0:
-        print("... done downloading pretrained model!")
-
-
 def norm_boxes(boxes, shape):
     """Converts boxes from pixel coordinates to normalized coordinates.
     boxes: [N, (y1, x1, y2, x2)] in pixel coordinates
@@ -693,11 +688,11 @@ def norm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in normalized coordinates
     """
-    h = shape[1]
+    h = shape[0]
     w = shape[1]
-    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.int32)
-    shift = tf.constant([0, 0, 1, 1], tf.int32)
-    return tf.cast(tf.divide((boxes - shift), scale),tf.float32)
+    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.float32)
+    shift = tf.constant([0, 0, 1, 1], tf.float32)
+    return tf.divide((boxes - shift), scale)
 
 
 def denorm_boxes(boxes, shape):
@@ -717,8 +712,7 @@ def denorm_boxes(boxes, shape):
     shift = tf.constant([0, 0, 1, 1], tf.float32)
     return tf.cast(tf.math.round(tf.multiply(boxes, scale) + shift),tf.int32)
 
-
-def resize(image:tf.Tensor, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
+def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
     """A wrapper for Scikit-Image resize().
 
     Scikit-Image generates warnings on every call to resize() if it doesn't
@@ -726,22 +720,14 @@ def resize(image:tf.Tensor, output_shape, method=tf.image.ResizeMethod.BILINEAR,
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
-    def _resize(image):
-        if len(tf.shape(image))==2:
-            image = tf.reshape(image, (tf.shape(image)[0],tf.shape(image)[1],1))
-            image = tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
-            image = tf.reshape(image, tf.shape(image)[:2])
-            return image
-        else:
-            return tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)
-
-    if image.dtype==tf.bool:
-        image = tf.cast(image,tf.float32)
-        return _resize(image)
-    else:
-        return _resize(image)
-
-
+    image = tf.cast(image,tf.float32)
+    condition = tf.equal(tf.shape(tf.shape(image)),tf.constant((2,)))
+    image = tf.cond(condition, 
+                    lambda : tf.expand_dims(image,2),
+                    lambda : image)
+    return tf.cond(condition,
+                    lambda : tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)[:,:,0],
+                    lambda : tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing))
 
 def log(text, array=None):
     """Prints a text message. And, optionally, if a Numpy array is provided it
@@ -767,8 +753,7 @@ def compute_backbone_shapes(config, image_shape):
         return config.COMPUTE_BACKBONE_SHAPE(image_shape)
 
     # Currently supports ResNet only
-    assert config.BACKBONE in ["resnet50", "resnet101"]
-    return np.array(
-        [[int(math.ceil(image_shape[0] / stride)),
-            int(math.ceil(image_shape[1] / stride))]
-            for stride in config.BACKBONE_STRIDES])
+    assert config.BACKBONE in ["resnet50", "resnet101"], config.BACKBONE
+    return [[tf.cast(tf.math.ceil(image_shape[0] / stride), tf.int32),
+            tf.cast(tf.math.ceil(image_shape[1] / stride), tf.int32)]
+            for stride in config.BACKBONE_STRIDES]

@@ -105,7 +105,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
 
     # Image meta data
     image_meta = compose_image_meta(image_id, original_shape, image.shape,
-                                    window, scale, active_class_ids)
+                                    window, scale, active_class_ids).numpy()
 
     return image, image_meta, class_ids, bbox, mask
 
@@ -279,6 +279,7 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
                1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
     """
+    anchors = anchors.numpy()
     # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
     # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
@@ -553,6 +554,7 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
             # Init batch arrays
             if b == 0:
+
                 batch_image_meta = np.zeros(
                     (batch_size,) + image_meta.shape, dtype=image_meta.dtype)
                 batch_rpn_match = np.zeros(

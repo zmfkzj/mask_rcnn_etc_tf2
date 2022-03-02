@@ -18,7 +18,8 @@ class Detector:
 
         with self.mirrored_strategy.scope():
             self.model = model
-    
+
+    @tf.function
     def detect(self, image_dir, shuffle=False, limit_step=-1):
         """Runs the detection pipeline.
 
@@ -36,10 +37,12 @@ class Detector:
                 if Path(f).suffix.lower() in ['.jpg', '.jpeg','.png']:
                     full_path = Path(r)/f
                     image_pathes.append(str(full_path))
-
-        things_gen = self.image_generator(image_pathes,shuffle)
-        mold_things = tf.data.Dataset.from_generator(lambda : things_gen, output_types=(tf.string, tf.int32, tf.float32, tf.float64, tf.int32))\
-                                    .batch(self.config.BATCH_SIZE).take(limit_step).prefetch(tf.data.AUTOTUNE)
+        pathes_size = len(image_pathes)
+        mold_things = tf.data.Dataset.from_tensor_slices(image_pathes).shuffle(pathes_size).map(lambda x: self.load_image(x))
+        mold_things = mold_things.batch(self.config.BATCH_SIZE).take(limit_step).prefetch(tf.data.AUTOTUNE)
+        # things_gen = self.image_generator(image_pathes,shuffle)
+        # mold_things = tf.data.Dataset.from_generator(lambda : things_gen, output_types=(tf.string, tf.int32, tf.float32, tf.float64, tf.int32))\
+        #                             .batch(self.config.BATCH_SIZE).take(limit_step).prefetch(tf.data.AUTOTUNE)
 
         results = []
         pbar = tqdm(unit='step', total = limit_step)
@@ -47,7 +50,7 @@ class Detector:
             mold_things = self.mirrored_strategy.experimental_distribute_dataset(mold_things)
             for dist_things in mold_things:
                 pathes, image_shapes, molded_images, image_metas, windows = dist_things
-                batch_detections, batch_mrcnn_mask = self.batch_detect(dist_things)
+                batch_detections, batch_mrcnn_mask = self.mirrored_strategy.run(self.step_fn, args=(*dist_things,))
 
                 #post-procecc
                 post_detections = self.mirrored_strategy.run(self.post_proceccing, 
@@ -61,25 +64,18 @@ class Detector:
             r['path'] = str(Path(r['path']).relative_to(image_dir))
         return results
 
-    @tf.function
-    def batch_detect(self, dist_things):
-        batch_detections = self.mirrored_strategy.run(self.step_fn, args=(*dist_things,))
-        # batch_detections = self.mirrored_strategy.gather(per_detections, axis=None)
-        return batch_detections
-
     def step_fn(self, pathes, image_shapes, molded_images, image_metas, windows):
         # Validate image sizes
         # All images in a batch MUST be of the same size
-        image_shape = molded_images[0].shape
+        image_shape = tf.shape(molded_images[0])
         for g in molded_images[1:]:
-            assert g.shape == image_shape,\
-                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
+            tf.debugging.assert_equal(tf.shape(g), image_shape,"After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes.")
 
         # Anchors
         anchors = self.model.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = tf.broadcast_to(anchors, (self.config.IMAGES_PER_GPU,) + anchors.shape)
+        anchors = tf.broadcast_to(anchors, tf.concat([(self.config.IMAGES_PER_GPU,), tf.shape(anchors)],-1))
 
         # Run object detection
         detections, _, _, mrcnn_mask, _, _, _ =\
@@ -109,7 +105,7 @@ class Detector:
         molded_image = mold_image(molded_image, self.config)
         # Build image_meta
         image_meta = compose_image_meta(
-            0, image.shape, molded_image.shape, window, scale,
+            0, tf.shape(image), tf.shape(molded_image), window, scale,
             np.zeros([self.config.NUM_CLASSES], dtype=np.int32))
         return molded_image, image_meta, window
 
@@ -198,6 +194,14 @@ class Detector:
             molded_image, image_meta, window = self.mold_inputs(image)
             yield path, image.shape, molded_image, image_meta, window
 
+    def load_image(self, path):
+        raw = tf.io.read_file(path)
+        image = tf.io.decode_image(raw, channels=3, expand_animations=False)
+
+        # Mold inputs to format expected by the neural network
+        molded_image, image_meta, window = self.mold_inputs(image)
+        return path, tf.shape(image), molded_image, image_meta, window
+
     def post_proceccing(self,pathes, image_shapes, detections, mrcnn_mask, molded_images ,windows):
         results = []
         for i in range(len(pathes)):
@@ -213,6 +217,6 @@ class Detector:
                 "classes": [self.classes[id] for id in final_class_ids.numpy()],
                 "class_ids": final_class_ids.numpy(),
                 "scores": final_scores.numpy(),
-                "masks": final_masks.numpy().astype(np.uint8),
+                "masks": final_masks.numpy(),
             })
         return results

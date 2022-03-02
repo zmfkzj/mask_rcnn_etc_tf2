@@ -59,7 +59,8 @@ class MaskRCNN(KM.Model):
         # A hack to get around Keras's bad support for constants
         self.anchors = AnchorsLayer(anchors, name='anchors')
 
-        self.detection_target = DetectionTargetLayer(self.config, name="proposal_targets")
+        self.detection_target_layer = DetectionTargetLayer(self.config, name="proposal_targets")
+        self.detection_layer = DetectionLayer(self.config, name="mrcnn_detection")
 
     def call(self, input_image, 
                     input_image_meta=None, 
@@ -130,6 +131,7 @@ class MaskRCNN(KM.Model):
             nms_threshold=self.config.RPN_NMS_THRESHOLD,
             name="ROI",
             config=self.config)([rpn_class, rpn_bbox, anchors])
+        
 
         if training:
             # Normalize coordinates
@@ -145,7 +147,7 @@ class MaskRCNN(KM.Model):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask = self.detection_target([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -158,16 +160,16 @@ class MaskRCNN(KM.Model):
         else:
             # Network Heads
             # Proposal classifier and BBox regressor heads
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =self.fpn_classifier(rpn_rois, mrcnn_feature_maps, input_image_meta, train_bn=self.config.TRAIN_BN)
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =self.fpn_classifier(rpn_rois, mrcnn_feature_maps, input_image_meta, train_bn=False)
 
             # Detections
             # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
             # normalized coordinates
-            detections = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
             # Create masks for detections
             detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
-            mrcnn_mask = self.fpn_mask(detection_boxes, mrcnn_feature_maps, input_image_meta, train_bn=self.config.TRAIN_BN)
+            mrcnn_mask = self.fpn_mask(detection_boxes, mrcnn_feature_maps, input_image_meta, train_bn=False)
 
             output = [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask, rpn_rois, rpn_class, rpn_bbox]
 
@@ -209,13 +211,18 @@ class MaskRCNN(KM.Model):
                 log("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
+    @tf.function
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
         backbone_shapes = compute_backbone_shapes(self.config, image_shape)
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):
             self._anchor_cache = {}
-        if not tuple(image_shape) in self._anchor_cache:
+        if isinstance(image_shape, tf.Tensor):
+            key = image_shape.ref()
+        else:
+            key = tuple(image_shape)
+        if not key in self._anchor_cache:
             # Generate Anchors
             a = utils.generate_pyramid_anchors(
                 self.config.RPN_ANCHOR_SCALES,
@@ -228,5 +235,5 @@ class MaskRCNN(KM.Model):
             # TODO: Remove this after the notebook are refactored to not use it
             self.anchors = a
             # Normalize coordinates
-            self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(a, image_shape[:2])
-        return self._anchor_cache[tuple(image_shape)]
+            self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
+        return self._anchor_cache[key]

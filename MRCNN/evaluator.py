@@ -26,6 +26,7 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
+        self.eval('d:/',10)
 
     def eval(self, save_dir, limit_step=-1)->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
@@ -77,7 +78,6 @@ class Evaluator(Detector):
             if img is not None:
                 gtIds:list = img['gtIds']
                 dtScores = img['dtScores']
-                gtMatches = img['gtMatches'][self.iou_idx]
                 dtMatches = img['dtMatches'][self.iou_idx]
 
                 _true, _pred, _sample_weight = zip(*([(1,1,0) if gtId in dtMatches else (1,0,1) for gtId in gtIds] 
