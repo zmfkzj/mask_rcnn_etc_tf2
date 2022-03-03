@@ -16,7 +16,6 @@ from collections import OrderedDict,defaultdict
 class Evaluator(Detector):
     def __init__(self, model, gt_image_dir, gt_json_path, config: Config = Config(), conf_thresh=0.25, iou_thresh=0.5) -> None:
         assert iou_thresh in np.arange(0.5,1,0.05)
-        self.iou_thresh = iou_thresh
         self.iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[iou_thresh]
         self.config = config
         self.gt_image_dir = gt_image_dir
@@ -34,19 +33,21 @@ class Evaluator(Detector):
         for class_id, cat_name in enumerate(self.classes):
             if cat_name=='BG':
                 continue
-            true, pred, sample_weight = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections)
-            metrics = {'mAP':keras.metrics.AUC(curve='PR'), 
-                        'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
+            true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections)
+            metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
                         'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
             for metric_name, metric_fn in metrics.items():
+                metric_fn.reset_state()
                 metric_fn.update_state(true, pred, sample_weight)
                 results_per_class[metric_name][cat_name] = np.round(metric_fn.result().numpy(), 4)
+            results_per_class['mAP'][cat_name] = mAP50
+
 
         results_per_class['F1-Score'] = self.cal_F1(results_per_class)
     
         results_for_all = {metric_name:np.mean(list(metric_per_class.values())) for metric_name, metric_per_class in results_per_class.items()}
 
-        metrics_head = [f'mAP{self.iou_thresh}',f'Recall{self.conf_thresh}',f'Precision{self.conf_thresh}',f'F1-Score{self.conf_thresh}']
+        metrics_head = [f'mAP50',f'Recall{self.conf_thresh*100}',f'Precision{self.conf_thresh*100}',f'F1-Score{self.conf_thresh*100}']
         df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
         df_for_all = pd.DataFrame({'total':results_for_all}).T.rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
 
@@ -63,6 +64,8 @@ class Evaluator(Detector):
         detections's keys: "path"(related path), "rois"(x1,y1,x2,y2), "classes", "class_ids", "scores", "masks"
         '''
         coco_detections = self.build_coco_results(detections)
+        if not coco_detections:
+            return [],[],[],0
         coco_results = self.coco.loadRes(coco_detections)
         coco_image_ids = [self.image_filename_id[det['path']] for det in detections]
 
@@ -72,6 +75,8 @@ class Evaluator(Detector):
         cocoEval.params.catIds = class_id
         cocoEval.evaluate()
         cocoEval.accumulate()
+        cocoEval.summarize()
+        mAP50 = cocoEval.stats[1]
         true = []
         pred = []
         sample_weight = []
@@ -87,7 +92,7 @@ class Evaluator(Detector):
                 pred.extend(_pred)
                 sample_weight.extend(_sample_weight)
 
-        return true, pred, sample_weight
+        return true, pred, sample_weight,mAP50
 
     def cal_F1(self, results):
         '''
@@ -109,7 +114,7 @@ class Evaluator(Detector):
         results = []
         for det in detections:
             image_path, rois, _, class_ids, scores, masks = det.values()
-            if rois is None:
+            if rois.size==0:
                 continue
 
             image_id = self.image_filename_id[image_path]
