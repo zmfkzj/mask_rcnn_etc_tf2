@@ -3,7 +3,6 @@ import tensorflow as tf
 import tensorflow.keras.layers as KL
 from MRCNN import utils
 
-# @tf.function
 def apply_box_deltas_graph(boxes, deltas):
     """Applies the given deltas to the given boxes.
     boxes: [N, (y1, x1, y2, x2)] boxes to update

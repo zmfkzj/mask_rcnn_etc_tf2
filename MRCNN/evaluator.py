@@ -26,9 +26,8 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
-        self.eval('d:/',10)
 
-    def eval(self, save_dir, limit_step=-1)->dict:
+    def eval(self, save_dir=None, limit_step=-1)->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
 
         results_per_class = defaultdict(OrderedDict)
@@ -50,9 +49,11 @@ class Evaluator(Detector):
         metrics_head = [f'mAP{self.iou_thresh}',f'Recall{self.conf_thresh}',f'Precision{self.conf_thresh}',f'F1-Score{self.conf_thresh}']
         df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
         df_for_all = pd.DataFrame({'total':results_for_all}).T.rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
-        with pd.ExcelWriter(Path(save_dir)/'results.xlsx') as writer:
-            df_per_class.to_excel(writer, sheet_name='per_class',encoding='euc-kr')
-            df_for_all.to_excel(writer, sheet_name='for_all',encoding='euc-kr')
+
+        if save_dir is not None:
+            with pd.ExcelWriter(Path(save_dir)/'results.xlsx') as writer:
+                df_per_class.to_excel(writer, sheet_name='per_class',encoding='euc-kr')
+                df_for_all.to_excel(writer, sheet_name='for_all',encoding='euc-kr')
 
         return results_for_all
 

@@ -27,6 +27,9 @@ class FPN_classifier(KM.Model):
         # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
         self.bbox = KL.TimeDistributed(KL.Dense(num_classes * 4, activation='linear'), name='mrcnn_bbox_fc')
 
+        self.shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")
+        self.mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(tf.shape(t)[0], tf.shape(t)[1], self.num_classes, 4),name="mrcnn_bbox"))
+
     def call(self, rois, feature_maps, image_meta, train_bn=True):
         """Builds the computation graph of the feature pyramid network classifier
         and regressor heads.
@@ -59,7 +62,8 @@ class FPN_classifier(KM.Model):
         x = self.timedist_bn_2(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")(x)
+        # shared = self.shared(x)
+        shared = tf.squeeze(tf.squeeze(x, 3), 2, name="pool_squeeze")
 
         # Classifier head
         mrcnn_class_logits = self.class_logits(shared)
@@ -69,9 +73,9 @@ class FPN_classifier(KM.Model):
         # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
         x = self.bbox(shared)
         # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
-        s = tf.shape(x)
         # mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
-        mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(s[0], s[1], self.num_classes, 4),name="mrcnn_bbox"))(x)
+        # mrcnn_bbox = self.mrcnn_bbox(x)
+        mrcnn_bbox = tf.reshape(x,(tf.shape(x)[0], tf.shape(x)[1], self.num_classes, 4),name="mrcnn_bbox")
 
         return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 

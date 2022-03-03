@@ -18,13 +18,13 @@ def extract_bboxes(mask):
 
     Returns: bbox array [num_instances, (y1, x1, y2, x2)].
     """
-    boxes = np.zeros([tf.shape(mask)[-1], 4], dtype=np.int32)
-    for i in range(tf.shape(mask)[-1]):
+    boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
+    for i in range(mask.shape[-1]):
         m = mask[:, :, i]
         # Bounding box.
         horizontal_indicies = np.where(np.any(m, axis=0))[0]
         vertical_indicies = np.where(np.any(m, axis=1))[0]
-        if tf.shape(horizontal_indicies)[0]:
+        if horizontal_indicies.shape[0]:
             x1, x2 = horizontal_indicies[[0, -1]]
             y1, y2 = vertical_indicies[[0, -1]]
             # x2 and y2 should not be part of the box. Increment by 1.
@@ -71,8 +71,8 @@ def compute_overlaps(boxes1, boxes2):
 
     # Compute overlaps to generate matrix [boxes1 count, boxes2 count]
     # Each cell contains the IoU value.
-    overlaps = np.zeros((tf.shape(boxes1)[0], tf.shape(boxes2)[0]))
-    for i in range(tf.shape(overlaps)[1]):
+    overlaps = np.zeros((boxes1.shape[0], boxes2.shape[0]))
+    for i in range(overlaps.shape[1]):
         box2 = boxes2[i]
         overlaps[:, i] = compute_iou(box2, boxes1, area2[i], area1)
     return overlaps
@@ -213,6 +213,156 @@ def box_refinement(box, gt_box):
     return np.stack([dy, dx, dh, dw], axis=1)
 
 
+############################################################
+#  Dataset
+############################################################
+
+class Dataset(object):
+    """The base class for dataset classes.
+    To use it, create a new class that adds functions specific to the dataset
+    you want to use. For example:
+
+    class CatsAndDogsDataset(Dataset):
+        def load_cats_and_dogs(self):
+            ...
+        def load_mask(self, image_id):
+            ...
+        def image_reference(self, image_id):
+            ...
+
+    See COCODataset and ShapesDataset as examples.
+    """
+
+    def __init__(self, class_map=None):
+        self._image_ids = []
+        self.image_info = []
+        # Background is always the first class
+        self.class_info = [{"source": "", "id": 0, "name": "BG"}]
+        self.source_class_ids = {}
+
+    def add_class(self, source, class_id, class_name):
+        assert "." not in source, "Source name cannot contain a dot"
+        # Does the class exist already?
+        for info in self.class_info:
+            if info['source'] == source and info["id"] == class_id:
+                # source.class_id combination already available, skip
+                return
+        # Add the class
+        self.class_info.append({
+            "source": source,
+            "id": class_id,
+            "name": class_name,
+        })
+
+    def add_image(self, source, image_id, path, **kwargs):
+        image_info = {
+            "id": image_id,
+            "source": source,
+            "path": path,
+        }
+        image_info.update(kwargs)
+        self.image_info.append(image_info)
+
+    def image_reference(self, image_id):
+        """Return a link to the image in its source Website or details about
+        the image that help looking it up or debugging it.
+
+        Override for your dataset, but pass to this function
+        if you encounter images not in your dataset.
+        """
+        return ""
+
+    def prepare(self, class_map=None):
+        """Prepares the Dataset class for use.
+
+        TODO: class map is not supported yet. When done, it should handle mapping
+              classes from different datasets to the same class ID.
+        """
+
+        def clean_name(name):
+            """Returns a shorter version of object names for cleaner display."""
+            return ",".join(name.split(",")[:1])
+
+        # Build (or rebuild) everything else from the info dicts.
+        self.num_classes = len(self.class_info)
+        self.class_ids = np.arange(self.num_classes)
+        self.class_names = [clean_name(c["name"]) for c in self.class_info]
+        self.num_images = len(self.image_info)
+        self._image_ids = np.arange(self.num_images)
+
+        # Mapping from source class and image IDs to internal IDs
+        self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
+                                      for info, id in zip(self.class_info, self.class_ids)}
+        self.image_from_source_map = {"{}.{}".format(info['source'], info['id']): id
+                                      for info, id in zip(self.image_info, self.image_ids)}
+
+        # Map sources to class_ids they support
+        self.sources = list(set([i['source'] for i in self.class_info]))
+        self.source_class_ids = {}
+        # Loop over datasets
+        for source in self.sources:
+            self.source_class_ids[source] = []
+            # Find classes that belong to this dataset
+            for i, info in enumerate(self.class_info):
+                # Include BG class in all datasets
+                if i == 0 or source == info['source']:
+                    self.source_class_ids[source].append(i)
+
+    def map_source_class_id(self, source_class_id):
+        """Takes a source class ID and returns the int class ID assigned to it.
+
+        For example:
+        dataset.map_source_class_id("coco.12") -> 23
+        """
+        return self.class_from_source_map[source_class_id]
+
+    def get_source_class_id(self, class_id, source):
+        """Map an internal class ID to the corresponding class ID in the source dataset."""
+        info = self.class_info[class_id]
+        assert info['source'] == source
+        return info['id']
+
+    @property
+    def image_ids(self):
+        return self._image_ids
+
+    def source_image_link(self, image_id):
+        """Returns the path or URL to the image.
+        Override this to return a URL to the image if it's available online for easy
+        debugging.
+        """
+        return self.image_info[image_id]["path"]
+
+    def load_image(self, image_id):
+        """Load the specified image and return a [H,W,3] Numpy array.
+        """
+        # Load image
+        image = skimage.io.imread(self.image_info[image_id]['path'])
+        # If grayscale. Convert to RGB for consistency.
+        if image.ndim != 3:
+            image = skimage.color.gray2rgb(image)
+        # If has an alpha channel, remove it for consistency
+        if image.shape[-1] == 4:
+            image = image[..., :3]
+        return image
+
+    def load_mask(self, image_id):
+        """Load instance masks for the given image.
+
+        Different datasets use different ways to store masks. Override this
+        method to load instance masks and return them in the form of am
+        array of binary masks of shape [height, width, instances].
+
+        Returns:
+            masks: A bool array of shape [height, width, instance count] with
+                a binary mask per instance.
+            class_ids: a 1D array of class IDs of the instance masks.
+        """
+        # Override this function to load a mask from your dataset.
+        # Otherwise, it returns an empty mask.
+        mask = np.empty([0, 0, 0])
+        class_ids = np.empty([0], np.int32)
+        return mask, class_ids
 
 
 def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square"):
@@ -248,52 +398,50 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
     padding: Padding added to the image [(top, bottom), (left, right), (0, 0)]
     """
     # Keep track of image dtype and return results in the same dtype
+    if isinstance(image, tf.Tensor):
+        image = image.numpy
+    image_dtype = image.dtype
     # Default window (y1, x1, y2, x2) and default scale == 1.
-    h = tf.shape(image)[0]
-    w = tf.shape(image)[1]
-    window = tf.cast(tf.stack((0, 0, h, w)), tf.float32)
-    scale = 1.
-    padding = tf.constant([(0, 0), (0, 0), (0, 0)], tf.float32)
+    h, w = image.shape[:2]
+    window = (0, 0, h, w)
+    scale = 1
+    padding = [(0, 0), (0, 0), (0, 0)]
     crop = None
 
     if mode == "none":
         return image, window, scale, padding, crop
 
     # Scale?
-    scale = tf.cond(tf.cast(min_dim,tf.bool),
-                    lambda :tf.math.maximum(1., tf.cast(min_dim / tf.math.minimum(h, w),tf.float32)),
-                    lambda : scale)
-    scale = tf.cond(tf.reduce_all([tf.cast(min_scale,tf.bool), scale < min_scale]),
-                    lambda: tf.cast(min_scale, tf.float32),
-                    lambda:scale)
+    if min_dim:
+        # Scale up but not down
+        scale = max(1, min_dim / min(h, w))
+    if min_scale and scale < min_scale:
+        scale = min_scale
 
     # Does it exceed max dim?
     if max_dim and mode == "square":
-        image_max = tf.math.maximum(h, w)
-        scale = tf.cond(tf.math.round(tf.cast(image_max,tf.float32) * scale) > max_dim, 
-                        lambda : tf.cast(max_dim / image_max, tf.float32), 
-                        lambda : scale)
+        image_max = max(h, w)
+        if round(image_max * scale) > max_dim:
+            scale = max_dim / image_max
 
     # Resize image using bilinear interpolation
-    image = tf.cond(scale != 1., 
-                    lambda : resize(image, (tf.math.round(tf.cast(h,tf.float32) * scale), tf.math.round(tf.cast(w,tf.float32) * scale))), 
-                    lambda: tf.cast(image,tf.float32))
+    if scale != 1:
+        image = resize(image, (round(h * scale), round(w * scale)),
+                       preserve_range=True)
 
     # Need padding or cropping?
     if mode == "square":
         # Get new height and width
-        h = tf.shape(image)[0]
-        w = tf.shape(image)[1]
+        h, w = image.shape[:2]
         top_pad = (max_dim - h) // 2
         bottom_pad = max_dim - h - top_pad
         left_pad = (max_dim - w) // 2
         right_pad = max_dim - w - left_pad
-        padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
-        image = tf.pad(image, padding, mode='CONSTANT', constant_values=0)
-        window = tf.cast(tf.stack((top_pad, left_pad, h + top_pad, w + left_pad)), tf.float32)
+        padding = [(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)]
+        image = np.pad(image, padding, mode='constant', constant_values=0)
+        window = (top_pad, left_pad, h + top_pad, w + left_pad)
     elif mode == "pad64":
-        h = tf.shape(image)[0]
-        w = tf.shape(image)[1]
+        h, w = image.shape[:2]
         # Both sides must be divisible by 64
         assert min_dim % 64 == 0, "Minimum dimension must be a multiple of 64"
         # Height
@@ -310,21 +458,20 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
             right_pad = max_w - w - left_pad
         else:
             left_pad = right_pad = 0
-        padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
-        image = tf.pad(image, padding, mode='CONSTANT', constant_values=0)
-        window = tf.cast(tf.stack((top_pad, left_pad, h + top_pad, w + left_pad)), tf.float32)
+        padding = [(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)]
+        image = np.pad(image, padding, mode='constant', constant_values=0)
+        window = (top_pad, left_pad, h + top_pad, w + left_pad)
     elif mode == "crop":
         # Pick a random crop
-        h = tf.shape(image)[0]
-        w = tf.shape(image)[1]
+        h, w = image.shape[:2]
         y = random.randint(0, (h - min_dim))
         x = random.randint(0, (w - min_dim))
         crop = (y, x, min_dim, min_dim)
         image = image[y:y + min_dim, x:x + min_dim]
-        window = tf.cast(tf.stack((0, 0, min_dim, min_dim)), tf.float32)
+        window = (0, 0, min_dim, min_dim)
     else:
         raise Exception("Mode {} not supported".format(mode))
-    return tf.cast(image,tf.float32), window, scale, padding, crop
+    return image.astype(image_dtype), window, scale, padding, crop
 
 
 def resize_mask(mask, scale, padding, crop=None):
@@ -338,15 +485,13 @@ def resize_mask(mask, scale, padding, crop=None):
     """
     # Suppress warning from scipy 0.13.0, the output shape of zoom() is
     # calculated with round() instead of int()
-    scale = scale.numpy()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
     if crop is not None:
-        y, x, h, w = crop.numpy()
+        y, x, h, w = crop
         mask = mask[y:y + h, x:x + w]
     else:
-        padding = padding.numpy()
         mask = np.pad(mask, padding, mode='constant', constant_values=0)
     return mask
 
@@ -357,17 +502,17 @@ def minimize_mask(bbox, mask, mini_shape):
 
     See inspect_data.ipynb notebook for more details.
     """
-    mini_mask = tf.zeros(tf.concat([mini_shape,(tf.shape(mask)[-1],)],-1), dtype=tf.bool).numpy()
-    for i in range(tf.shape(mask)[-1]):
+    mini_mask = np.zeros(mini_shape + (mask.shape[-1],), dtype=bool)
+    for i in range(mask.shape[-1]):
         # Pick slice and cast to bool in case load_mask() returned wrong dtype
-        m = mask[:, :, i].astype(np.bool)
+        m = mask[:, :, i].astype(bool)
         y1, x1, y2, x2 = bbox[i][:4]
         m = m[y1:y2, x1:x2]
         if m.size == 0:
             raise Exception("Invalid bounding box with area of zero")
         # Resize with bilinear interpolation
         m = resize(m, mini_shape)
-        mini_mask[:, :, i] = tf.cast(tf.round(m),tf.bool).numpy()
+        mini_mask[:, :, i] = np.around(m).astype(np.bool)
     return mini_mask
 
 
@@ -403,16 +548,13 @@ def unmold_mask(mask, bbox, image_shape):
     Returns a binary mask with the same size as the original image.
     """
     threshold = 0.5
-    y1 = bbox[0]
-    x1 = bbox[1]
-    y2 = bbox[2]
-    x2 = bbox[3]
+    y1, x1, y2, x2 = bbox
     mask = resize(mask, (y2 - y1, x2 - x1))
-    mask = tf.cast(tf.where(mask >= threshold, 1, 0),tf.bool)
+    mask = np.where(mask >= threshold, 1, 0).astype(np.bool)
 
     # Put the mask in the right location.
     full_mask = np.zeros(image_shape[:2], dtype=np.bool)
-    full_mask[y1:y2, x1:x2] = mask.numpy()
+    full_mask[y1:y2, x1:x2] = mask
     return full_mask
 
 
@@ -431,31 +573,30 @@ def generate_anchors(scales, ratios, shape, feature_stride, anchor_stride):
         value is 2 then generate anchors for every other feature map pixel.
     """
     # Get all combinations of scales and ratios
-    scales = tf.cast(scales, tf.float32)
-    scales, ratios = tf.meshgrid(scales, ratios)
-    scales = tf.reshape(scales, [-1])
-    ratios = tf.reshape(ratios, [-1])
+    scales, ratios = np.meshgrid(np.array(scales), np.array(ratios))
+    scales = scales.flatten()
+    ratios = ratios.flatten()
 
     # Enumerate heights and widths from scales and ratios
-    heights = scales / tf.sqrt(ratios)
-    widths = scales * tf.sqrt(ratios)
+    heights = scales / np.sqrt(ratios)
+    widths = scales * np.sqrt(ratios)
 
     # Enumerate shifts in feature space
-    shifts_y = tf.cast(tf.range(0, shape[0], anchor_stride) * feature_stride,tf.float32)
-    shifts_x = tf.cast(tf.range(0, shape[1], anchor_stride) * feature_stride,tf.float32)
-    shifts_x, shifts_y = tf.meshgrid(shifts_x, shifts_y)
+    shifts_y = np.arange(0, shape[0], anchor_stride) * feature_stride
+    shifts_x = np.arange(0, shape[1], anchor_stride) * feature_stride
+    shifts_x, shifts_y = np.meshgrid(shifts_x, shifts_y)
 
     # Enumerate combinations of shifts, widths, and heights
-    box_widths, box_centers_x = tf.meshgrid(widths, shifts_x)
-    box_heights, box_centers_y = tf.meshgrid(heights, shifts_y)
+    box_widths, box_centers_x = np.meshgrid(widths, shifts_x)
+    box_heights, box_centers_y = np.meshgrid(heights, shifts_y)
 
     # Reshape to get a list of (y, x) and a list of (h, w)
-    box_centers = tf.reshape(tf.stack(
-        [box_centers_y, box_centers_x], axis=2),[-1, 2])
-    box_sizes = tf.reshape(tf.stack([box_heights, box_widths], axis=2),[-1, 2])
+    box_centers = np.stack(
+        [box_centers_y, box_centers_x], axis=2).reshape([-1, 2])
+    box_sizes = np.stack([box_heights, box_widths], axis=2).reshape([-1, 2])
 
     # Convert to corner coordinates (y1, x1, y2, x2)
-    boxes = tf.concat([box_centers - 0.5 * box_sizes,
+    boxes = np.concatenate([box_centers - 0.5 * box_sizes,
                             box_centers + 0.5 * box_sizes], axis=1)
     return boxes
 
@@ -477,7 +618,7 @@ def generate_pyramid_anchors(scales, ratios, feature_shapes, feature_strides,
     for i in range(len(scales)):
         anchors.append(generate_anchors(scales[i], ratios, feature_shapes[i],
                                         feature_strides[i], anchor_stride))
-    return tf.concat(anchors, axis=0)
+    return np.concatenate(anchors, axis=0)
 
 
 ############################################################
@@ -677,6 +818,7 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
 
     return result
 
+
 def norm_boxes(boxes, shape):
     """Converts boxes from pixel coordinates to normalized coordinates.
     boxes: [N, (y1, x1, y2, x2)] in pixel coordinates
@@ -688,11 +830,10 @@ def norm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in normalized coordinates
     """
-    h = shape[0]
-    w = shape[1]
-    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.float32)
-    shift = tf.constant([0, 0, 1, 1], tf.float32)
-    return tf.divide((boxes - shift), scale)
+    h, w = shape
+    scale = np.array([h - 1, w - 1, h - 1, w - 1])
+    shift = np.array([0, 0, 1, 1])
+    return np.divide((boxes - shift), scale).astype(np.float32)
 
 
 def denorm_boxes(boxes, shape):
@@ -706,13 +847,14 @@ def denorm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in pixel coordinates
     """
-    h = shape[0]
-    w = shape[1]
-    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]),tf.float32)
-    shift = tf.constant([0, 0, 1, 1], tf.float32)
-    return tf.cast(tf.math.round(tf.multiply(boxes, scale) + shift),tf.int32)
+    h, w = shape
+    scale = np.array([h - 1, w - 1, h - 1, w - 1])
+    shift = np.array([0, 0, 1, 1])
+    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
 
-def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_aliasing=False):
+
+def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
+           preserve_range=False, anti_aliasing=False, anti_aliasing_sigma=None):
     """A wrapper for Scikit-Image resize().
 
     Scikit-Image generates warnings on every call to resize() if it doesn't
@@ -720,14 +862,12 @@ def resize(image, output_shape, method=tf.image.ResizeMethod.BILINEAR, anti_alia
     of skimage. This solves the problem by using different parameters per
     version. And it provides a central place to control resizing defaults.
     """
-    image = tf.cast(image,tf.float32)
-    condition = tf.equal(tf.shape(tf.shape(image)),tf.constant((2,)))
-    image = tf.cond(condition, 
-                    lambda : tf.expand_dims(image,2),
-                    lambda : image)
-    return tf.cond(condition,
-                    lambda : tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing)[:,:,0],
-                    lambda : tf.image.resize(image, output_shape, method=method, antialias=anti_aliasing))
+    return skimage.transform.resize(
+        image.astype(np.uint8), output_shape,
+        order=order, mode=mode, cval=cval, clip=clip,
+        preserve_range=preserve_range, anti_aliasing=anti_aliasing,
+        anti_aliasing_sigma=anti_aliasing_sigma)
+
 
 def log(text, array=None):
     """Prints a text message. And, optionally, if a Numpy array is provided it
@@ -753,7 +893,8 @@ def compute_backbone_shapes(config, image_shape):
         return config.COMPUTE_BACKBONE_SHAPE(image_shape)
 
     # Currently supports ResNet only
-    assert config.BACKBONE in ["resnet50", "resnet101"], config.BACKBONE
-    return [[tf.cast(tf.math.ceil(image_shape[0] / stride), tf.int32),
-            tf.cast(tf.math.ceil(image_shape[1] / stride), tf.int32)]
-            for stride in config.BACKBONE_STRIDES]
+    assert config.BACKBONE in ["resnet50", "resnet101"]
+    return np.array(
+        [[int(math.ceil(image_shape[0] / stride)),
+            int(math.ceil(image_shape[1] / stride))]
+            for stride in config.BACKBONE_STRIDES])

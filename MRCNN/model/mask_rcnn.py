@@ -62,6 +62,8 @@ class MaskRCNN(KM.Model):
         self.detection_target_layer = DetectionTargetLayer(self.config, name="proposal_targets")
         self.detection_layer = DetectionLayer(self.config, name="mrcnn_detection")
 
+        self.detection_boxes = KL.Lambda(lambda x: x[..., :4])
+
     def call(self, input_image, 
                     input_image_meta=None, 
                     input_anchors=None, 
@@ -111,7 +113,6 @@ class MaskRCNN(KM.Model):
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
         for p in rpn_feature_maps:
-
             layer_outputs.append(self.rpn(p))
         # Concatenate layer outputs
         # Convert from list of lists of level outputs to list of lists
@@ -168,7 +169,7 @@ class MaskRCNN(KM.Model):
             detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
             # Create masks for detections
-            detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
+            detection_boxes = self.detection_boxes(detections)
             mrcnn_mask = self.fpn_mask(detection_boxes, mrcnn_feature_maps, input_image_meta, train_bn=False)
 
             output = [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask, rpn_rois, rpn_class, rpn_bbox]
@@ -211,17 +212,13 @@ class MaskRCNN(KM.Model):
                 log("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
-    @tf.function
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
         backbone_shapes = compute_backbone_shapes(self.config, image_shape)
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):
             self._anchor_cache = {}
-        if isinstance(image_shape, tf.Tensor):
-            key = image_shape.ref()
-        else:
-            key = tuple(image_shape)
+        key = tuple(image_shape)
         if not key in self._anchor_cache:
             # Generate Anchors
             a = utils.generate_pyramid_anchors(
@@ -237,3 +234,6 @@ class MaskRCNN(KM.Model):
             # Normalize coordinates
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
+    
+    def set_batch_size(self, batch_size):
+        self.config.BATCH_SIZE = batch_size

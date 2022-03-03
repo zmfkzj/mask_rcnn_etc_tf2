@@ -68,7 +68,7 @@ class Trainer:
             pbar.close()
             self.ckpt_mng.save()
 
-            val_metric = self.val_evaluator.eval('d:/',limit_step=self.config.VALIDATION_STEPS)
+            val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS)
             with self.summary_writer.as_default():
                 tf.summary.scalar('val_mAP', val_metric['mAP'], step=epoch)
                 tf.summary.scalar('val_recall', val_metric['recall'], step=epoch)
