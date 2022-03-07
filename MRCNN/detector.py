@@ -34,7 +34,7 @@ class Detector:
             take_count = pathes_size
         else:
             tqdm_total = limit_step
-            take_count = limit_step*self.config.IMAGES_PER_GPU*self.config.GPU_COUNT+1
+            take_count = limit_step*self.config.IMAGES_PER_GPU*self.config.GPU_COUNT
 
         all_pathes = []
         all_shapes = []
