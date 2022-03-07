@@ -192,7 +192,7 @@ class MaskRCNN(KM.Model):
             # Detections
             # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
             # normalized coordinates
-            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta], batch_size)
+            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
             # Create masks for detections
             detection_boxes = self.detection_boxes(detections)

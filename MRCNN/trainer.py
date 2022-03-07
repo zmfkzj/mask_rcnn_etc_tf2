@@ -115,6 +115,7 @@ class Trainer:
         mean_losses = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
         return mean_losses
     
+    @tf.function
     def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 

@@ -41,7 +41,7 @@ class Evaluator(Detector):
                 metric_fn.reset_state()
                 metric_fn.update_state(true, pred, sample_weight)
                 results_per_class[metric_name][cat_name] = np.round(metric_fn.result().numpy(), 4)
-            results_per_class['mAP'][cat_name] = mAP50
+            results_per_class['mAP'][cat_name] = np.nan if mAP50==-1 else mAP50
 
 
         results_per_class['F1-Score'] = self.cal_F1(results_per_class)

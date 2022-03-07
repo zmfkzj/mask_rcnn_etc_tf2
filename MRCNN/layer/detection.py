@@ -127,12 +127,12 @@ class DetectionLayer(KL.Layer):
         super(DetectionLayer, self).__init__(**kwargs)
         self.config = config
 
-    def call(self, inputs, batch_size):
+    def call(self, inputs):
         rois = inputs[0]
         mrcnn_class = inputs[1]
         mrcnn_bbox = inputs[2]
         image_meta = inputs[3]
-
+        batch_size = tf.shape(rois)[0]
         # Get windows of images in normalized coordinates. Windows are the area
         # in the image that excludes the padding.
         # Use the shape of the first image in the batch to normalize the window
