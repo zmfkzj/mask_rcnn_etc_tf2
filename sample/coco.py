@@ -14,7 +14,7 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.01
+    LEARNING_RATE = 0.001
     IMAGES_PER_GPU = 3
 
 train_dataset = CocoDataset()
@@ -39,10 +39,10 @@ trainer.train(120, '4+')
 trainer.train(160, 'all')
 
 class ValConfig(Config):
-    GPUS = 0
+    GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    IMAGES_PER_GPU = 1
+    IMAGES_PER_GPU = 20
 
 val_config = ValConfig()
 model = MaskRCNN(val_config)

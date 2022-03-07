@@ -32,10 +32,16 @@ def clip_boxes_graph(boxes, window):
     boxes: [N, (y1, x1, y2, x2)]
     window: [4] in the form y1, x1, y2, x2
     """
+    batch_size = tf.shape(boxes)[0]
     # Split
-    wy1, wx1, wy2, wx2 = tf.cond(tf.shape(tf.shape(window))==1,
-                                 lambda : tf.split(tf.reshape(window,[1,tf.shape(window)[0]]),4,axis=1),
-                                 lambda : tf.split(tf.broadcast_to(tf.expand_dims(window,1),[tf.shape(window)[0],1000,4]),4,axis=2))
+    if isinstance(window, np.ndarray):
+        window = tf.broadcast_to(tf.reshape(window,[1,1,4]),[batch_size,1,4])
+    else:
+        window = tf.expand_dims(window,1)
+    # window = tf.cond(tf.shape(tf.shape(window))==1,
+    #                              lambda : tf.broadcast_to(tf.reshape(window,[1,1,4]),[3,1,4]),
+    #                              lambda : tf.expand_dims(window,1))
+    wy1, wx1, wy2, wx2 = tf.split(tf.broadcast_to(window,[batch_size,tf.shape(boxes)[1],4]),4,axis=2)
     y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
     # Clip
     y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
