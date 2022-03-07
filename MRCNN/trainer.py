@@ -59,21 +59,32 @@ class Trainer:
             with self.mirrored_strategy.scope():
                 for i, (inputs, _) in enumerate(self.dataset):
                     if self.config.STEPS_PER_EPOCH > i:
-                        mean_loss = self.train_step(inputs)
+                        mean_losses = self.train_step(inputs)
+                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses, total_loss= mean_losses
+
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
+                            tf.summary.scalar('rpn_bbox_loss', rpn_bbox_loss, step=self.optimizer.iterations)
+                            tf.summary.scalar('mrcnn_class_loss', class_loss, step=self.optimizer.iterations)
+                            tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
+                            tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
+                            tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
+                            tf.summary.scalar('total_loss', total_loss, step=self.optimizer.iterations)
                     else:
                         break
 
                     pbar.update()
-                    pbar.set_postfix({'mean_loss':mean_loss.numpy()})
+                    pbar.set_postfix({'total_loss':total_loss.numpy()})
             pbar.close()
             self.ckpt_mng.save()
 
-            val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS)
-            with self.summary_writer.as_default():
-                tf.summary.scalar('val_mAP', val_metric['mAP'], step=epoch)
-                tf.summary.scalar('val_recall', val_metric['recall'], step=epoch)
-                tf.summary.scalar('val_precision', val_metric['precision'], step=epoch)
-                tf.summary.scalar('val_F1-Score', val_metric['F1-Score'], step=epoch)
+            if self.val_evaluator is not None:
+                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS)
+                with self.summary_writer.as_default():
+                    tf.summary.scalar('val_mAP', val_metric['mAP'], step=self.optimizer.iterations)
+                    tf.summary.scalar('val_recall', val_metric['recall'], step=self.optimizer.iterations)
+                    tf.summary.scalar('val_precision', val_metric['precision'], step=self.optimizer.iterations)
+                    tf.summary.scalar('val_F1-Score', val_metric['F1-Score'], step=self.optimizer.iterations)
 
 
     @tf.function
@@ -86,24 +97,23 @@ class Trainer:
                     input_gt_class_ids, input_gt_boxes, input_gt_masks):
             with tf.GradientTape() as tape:
                 output = self.model(images, input_image_meta, 
-                                    input_anchors=None, 
                                     input_gt_class_ids=input_gt_class_ids, 
                                     input_gt_boxes=input_gt_boxes, 
                                     input_gt_masks=input_gt_masks, 
                                     input_rois = None,
                                     training=True)
-                active_class_ids = KL.Lambda( lambda x: parse_image_meta_graph(x)["active_class_ids"])(input_image_meta)
-                loss = self.cal_loss(active_class_ids, input_rpn_match, input_rpn_bbox,*output) / self.config.BATCH_SIZE
+                active_class_ids = parse_image_meta_graph(input_image_meta)["active_class_ids"]
+                losses = self.cal_loss(active_class_ids, input_rpn_match, input_rpn_bbox,*output)
             
-            grads = tape.gradient(loss, self.model.trainable_variables)
+            grads = tape.gradient(losses[-1], self.model.trainable_variables)
             self.optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
-            return loss
+            return losses
         
         per_example_losses = self.mirrored_strategy.run(step_fn, args=(images, input_image_meta, 
                                                                     input_rpn_match, input_rpn_bbox, 
                                                                     input_gt_class_ids, input_gt_boxes, input_gt_masks))
-        mean_loss = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
-        return mean_loss
+        mean_losses = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
+        return mean_losses
     
     def cal_loss(self, active_class_ids, input_rpn_match, input_rpn_bbox, 
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
@@ -125,13 +135,5 @@ class Trainer:
 
         total_loss = tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses])
 
-        with self.summary_writer.as_default():
-            tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
-            tf.summary.scalar('rpn_bbox_loss', rpn_bbox_loss, step=self.optimizer.iterations)
-            tf.summary.scalar('mrcnn_class_loss', class_loss, step=self.optimizer.iterations)
-            tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
-            tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
-            tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
-            tf.summary.scalar('total_loss', total_loss, step=self.optimizer.iterations)
 
-        return total_loss
+        return rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses, total_loss

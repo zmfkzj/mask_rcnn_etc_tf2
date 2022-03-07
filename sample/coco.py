@@ -23,7 +23,7 @@ train_dataset.load_coco('d:/coco/train2017/', 'd:/coco/annotations/instances_tra
 train_config = TrainConfig()
 model = MaskRCNN(train_config)
 
-lr_schedule = keras.optimizers.schedules.ExponentialDecay(train_config.LEARNING_RATE/train_config.STEPS_PER_EPOCH, 5000, 0.96, staircase=True)
+lr_schedule = keras.optimizers.schedules.ExponentialDecay(train_config.LEARNING_RATE/train_config.STEPS_PER_EPOCH, 10000, 0.1, staircase=True,)
 
 optimizer = keras.optimizers.SGD(learning_rate=lr_schedule,
                                 momentum=train_config.LEARNING_MOMENTUM)
@@ -32,9 +32,11 @@ ckpt = tf.train.Checkpoint(optimizer=optimizer, model=model)
 manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
 status = ckpt.restore(manager.latest_checkpoint)
 
-val_evaluator = Evaluator(model, 'd:/coco/val2017/', 'd:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25)
+val_evaluator = Evaluator(model, 'C:/coco/val2017/', 'C:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25)
 trainer = Trainer(model, train_dataset, manager, config=train_config, optimizer=optimizer, val_evaluator=val_evaluator)
-trainer.train(300, 'all')
+trainer.train(40, 'heads')
+trainer.train(120, '4+')
+trainer.train(160, 'all')
 
 class ValConfig(Config):
     GPUS = 0
@@ -49,7 +51,7 @@ ckpt = tf.train.Checkpoint(optimizer=optimizer, model=model)
 manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
 status = ckpt.restore(manager.latest_checkpoint)
 
-val_evaluator = Evaluator(model, 'd:/coco/val2017/', 'd:/coco/annotations/instances_val2017.json',val_config, conf_thresh=0.25)
+val_evaluator = Evaluator(model, 'C:/coco/val2017/', 'C:/coco/annotations/instances_val2017.json',val_config, conf_thresh=0.25)
 metric = val_evaluator.eval('d:/')
 print(metric)
 

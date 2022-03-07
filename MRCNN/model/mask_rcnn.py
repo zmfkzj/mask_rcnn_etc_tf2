@@ -1,8 +1,10 @@
+from distutils.command.config import config
 import re
 import tensorflow as tf
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
 import numpy as np
+from tqdm import trange
 
 from MRCNN import utils
 from MRCNN.config import Config
@@ -52,12 +54,9 @@ class MaskRCNN(KM.Model):
 
         self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
 
-        anchors = self.get_anchors(self.config.IMAGE_SHAPE)
+        self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = tf.broadcast_to(anchors, (self.config.IMAGES_PER_GPU,) + anchors.shape)
-        # A hack to get around Keras's bad support for constants
-        self.anchors = AnchorsLayer(anchors, name='anchors')
 
         self.detection_target_layer = DetectionTargetLayer(self.config, name="proposal_targets")
         self.detection_layer = DetectionLayer(self.config, name="mrcnn_detection")
@@ -66,7 +65,6 @@ class MaskRCNN(KM.Model):
 
     def call(self, input_image, 
                     input_image_meta=None, 
-                    input_anchors=None, 
                     input_gt_class_ids=None, 
                     input_gt_boxes=None, 
                     input_gt_masks=None, 
@@ -77,6 +75,7 @@ class MaskRCNN(KM.Model):
         # Bottom-up Layers
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
+        batch_size = input_image.shape[0]
         if callable(self.config.BACKBONE):
             _, C2, C3, C4, C5 = self.config.BACKBONE(input_image, train_bn=self.config.TRAIN_BN)
         else:
@@ -104,11 +103,38 @@ class MaskRCNN(KM.Model):
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
-        # Anchors
-        if training:
-            anchors = self.anchors(input_image)
-        else:
-            anchors = input_anchors
+        if batch_size == 0:
+            rpn_count = tf.reduce_sum([tf.reduce_prod(tf.shape(f)[1:3])*len(self.config.RPN_ANCHOR_RATIOS) for f in rpn_feature_maps])
+            rpn_bbox = tf.zeros([batch_size,rpn_count,4], dtype=tf.float32)
+            
+            if training:
+                rpn_class_logits = tf.zeros([batch_size,rpn_count,2], dtype=tf.float32)
+                target_class_ids = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10)], dtype=tf.float32)
+                mrcnn_class_logits = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.NUM_CLASSES], dtype=tf.float32)
+                target_bbox = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),4], dtype=tf.float32)
+                mrcnn_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1],self.config.NUM_CLASSES], dtype=tf.float32)
+                mrcnn_bbox = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.NUM_CLASSES,4], dtype=tf.float32)
+                target_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1]], dtype=tf.float32)
+                output = [rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask]
+                return output
+            else:
+                detections = tf.zeros([batch_size,self.config.DETECTION_MAX_INSTANCES,6], dtype=tf.float32)
+                mrcnn_class = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,self.config.NUM_CLASSES], dtype=tf.float32)
+                mrcnn_bbox = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,self.config.NUM_CLASSES,4], dtype=tf.float32)
+                rpn_rois = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,4], dtype=tf.float32)
+                rpn_class = tf.zeros([batch_size,rpn_count,2], dtype=tf.float32)
+                mrcnn_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_INFERENCE/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1],self.config.NUM_CLASSES], dtype=tf.float32)
+                output = [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask, rpn_rois, rpn_class, rpn_bbox]
+                return output
+
+        # # Anchors
+        anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+        # if training:
+        #     anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+        #     # A hack to get around Keras's bad support for constants
+        #     anchors = AnchorsLayer(anchors, name='anchors')
+        # else:
+        #     anchors = self.anchors
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -136,11 +162,11 @@ class MaskRCNN(KM.Model):
 
         if training:
             # Normalize coordinates
-            gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(tf.cast(x,tf.float32), input_image.shape[1:3]))(input_gt_boxes)
+            gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
 
             if not self.config.USE_RPN_ROIS:
                 # Normalize coordinates
-                target_rois = KL.Lambda(lambda x: norm_boxes_graph(tf.cast(x,tf.float32), input_image.shape[1:3]))(input_rois)
+                target_rois = norm_boxes_graph(tf.cast(input_rois,tf.float32), input_image.shape[1:3])
             else:
                 target_rois = rpn_rois
 
@@ -148,7 +174,7 @@ class MaskRCNN(KM.Model):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks],batch_size)
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -166,7 +192,7 @@ class MaskRCNN(KM.Model):
             # Detections
             # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
             # normalized coordinates
-            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta], batch_size)
 
             # Create masks for detections
             detection_boxes = self.detection_boxes(detections)
@@ -234,6 +260,3 @@ class MaskRCNN(KM.Model):
             # Normalize coordinates
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
-    
-    def set_batch_size(self, batch_size):
-        self.config.BATCH_SIZE = batch_size

@@ -9,21 +9,21 @@ def apply_box_deltas_graph(boxes, deltas):
     deltas: [N, (dy, dx, log(dh), log(dw))] refinements to apply
     """
     # Convert to y, x, h, w
-    height = boxes[:, 2] - boxes[:, 0]
-    width = boxes[:, 3] - boxes[:, 1]
-    center_y = boxes[:, 0] + 0.5 * height
-    center_x = boxes[:, 1] + 0.5 * width
+    height = boxes[..., 2] - boxes[..., 0]
+    width = boxes[..., 3] - boxes[..., 1]
+    center_y = boxes[..., 0] + 0.5 * height
+    center_x = boxes[..., 1] + 0.5 * width
     # Apply deltas
-    center_y += deltas[:, 0] * height
-    center_x += deltas[:, 1] * width
-    height *= tf.exp(deltas[:, 2])
-    width *= tf.exp(deltas[:, 3])
+    center_y += deltas[..., 0] * height
+    center_x += deltas[..., 1] * width
+    height *= tf.exp(deltas[..., 2])
+    width *= tf.exp(deltas[..., 3])
     # Convert back to y1, x1, y2, x2
     y1 = center_y - 0.5 * height
     x1 = center_x - 0.5 * width
     y2 = y1 + height
     x2 = x1 + width
-    result = tf.stack([y1, x1, y2, x2], axis=1, name="apply_box_deltas_out")
+    result = tf.stack([y1, x1, y2, x2], axis=2, name="apply_box_deltas_out")
     return result
 
 
@@ -33,15 +33,17 @@ def clip_boxes_graph(boxes, window):
     window: [4] in the form y1, x1, y2, x2
     """
     # Split
-    wy1, wx1, wy2, wx2 = tf.split(window, 4)
-    y1, x1, y2, x2 = tf.split(boxes, 4, axis=1)
+    wy1, wx1, wy2, wx2 = tf.cond(tf.shape(tf.shape(window))==1,
+                                 lambda : tf.split(tf.reshape(window,[1,tf.shape(window)[0]]),4,axis=1),
+                                 lambda : tf.split(tf.broadcast_to(tf.expand_dims(window,1),[tf.shape(window)[0],1000,4]),4,axis=2))
+    y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
     # Clip
     y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
     x1 = tf.maximum(tf.minimum(x1, wx2), wx1)
     y2 = tf.maximum(tf.minimum(y2, wy2), wy1)
     x2 = tf.maximum(tf.minimum(x2, wx2), wx1)
-    clipped = tf.concat([y1, x1, y2, x2], axis=1, name="clipped_boxes")
-    clipped.set_shape((clipped.shape[0], 4))
+    clipped = tf.concat([y1, x1, y2, x2], axis=2, name="clipped_boxes")
+    clipped.set_shape((clipped.shape[0], clipped.shape[1], 4))
     return clipped
 
 
@@ -80,35 +82,31 @@ class ProposalLayer(KL.Layer):
         pre_nms_limit = tf.minimum(self.config.PRE_NMS_LIMIT, tf.shape(anchors)[1])
         ix = tf.nn.top_k(scores, pre_nms_limit, sorted=True,
                          name="top_anchors").indices
-        scores = utils.batch_slice([scores, ix], lambda x, y: tf.gather(x, y),
-                                   self.config.IMAGES_PER_GPU)
-        deltas = utils.batch_slice([deltas, ix], lambda x, y: tf.gather(x, y),
-                                   self.config.IMAGES_PER_GPU)
-        pre_nms_anchors = utils.batch_slice([anchors, ix], lambda a, x: tf.gather(a, x),
-                                    self.config.IMAGES_PER_GPU,
-                                    names=["pre_nms_anchors"])
+        scores = tf.gather(scores, ix, axis=1,batch_dims=1)
+        deltas = tf.gather(deltas, ix, axis=1,batch_dims=1)
+        pre_nms_anchors = tf.gather(anchors,ix,axis=1,batch_dims=1, name="pre_nms_anchors")
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
-        boxes = utils.batch_slice([pre_nms_anchors, deltas],
-                                  lambda x, y: apply_box_deltas_graph(x, y),
-                                  self.config.IMAGES_PER_GPU,
-                                  names=["refined_anchors"])
+        boxes = apply_box_deltas_graph(pre_nms_anchors,deltas)
 
         # Clip to image boundaries. Since we're in normalized coordinates,
         # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
         window = np.array([0, 0, 1, 1], dtype=np.float32)
-        boxes = utils.batch_slice(boxes,
-                                  lambda x: clip_boxes_graph(x, window),
-                                  self.config.IMAGES_PER_GPU,
-                                  names=["refined_anchors_clipped"])
+        boxes = clip_boxes_graph(boxes, window)
+        # boxes = utils.batch_slice(boxes,
+        #                           lambda x: clip_boxes_graph(x, window),
+        #                           batch_size,
+        #                           names=["refined_anchors_clipped"])
 
         # Filter out small boxes
         # According to Xinlei Chen's paper, this reduces detection accuracy
         # for small objects, so we're skipping it.
 
         # Non-max suppression
-        def nms(boxes, scores):
+        def nms(inputs):
+            boxes = inputs[0]
+            scores = inputs[1]
             indices = tf.image.non_max_suppression(
                 boxes, scores, self.proposal_count,
                 self.nms_threshold, name="rpn_non_max_suppression")
@@ -117,8 +115,8 @@ class ProposalLayer(KL.Layer):
             padding = tf.maximum(self.proposal_count - tf.shape(proposals)[0], 0)
             proposals = tf.pad(proposals, [(0, padding), (0, 0)])
             return proposals
-        proposals = utils.batch_slice([boxes, scores], nms,
-                                      self.config.IMAGES_PER_GPU)
+        proposals = tf.map_fn(nms,[boxes, scores], dtype=tf.float32)
+        
         return proposals
 
     def compute_output_shape(self, input_shape):

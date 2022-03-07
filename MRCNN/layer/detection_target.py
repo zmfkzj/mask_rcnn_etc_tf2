@@ -199,7 +199,7 @@ class DetectionTargetLayer(KL.Layer):
         super(DetectionTargetLayer, self).__init__(**kwargs)
         self.config = config
 
-    def call(self, inputs):
+    def call(self, inputs, batch_size):
         proposals = inputs[0]
         gt_class_ids = inputs[1]
         gt_boxes = inputs[2]
@@ -211,7 +211,7 @@ class DetectionTargetLayer(KL.Layer):
         outputs = utils.batch_slice(
             [proposals, gt_class_ids, gt_boxes, gt_masks],
             lambda w, x, y, z: detection_targets_graph( w, x, y, z, self.config),
-            self.config.IMAGES_PER_GPU, names=names)
+            batch_size, names=names)
         return outputs
 
     def compute_output_shape(self, input_shape):

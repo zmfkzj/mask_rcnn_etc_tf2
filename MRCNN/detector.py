@@ -34,7 +34,7 @@ class Detector:
             take_count = pathes_size
         else:
             tqdm_total = limit_step
-            take_count = limit_step*self.config.IMAGES_PER_GPU*self.config.GPU_COUNT
+            take_count = limit_step*self.config.IMAGES_PER_GPU*self.config.GPU_COUNT+1
 
         all_pathes = []
         all_shapes = []
@@ -53,9 +53,8 @@ class Detector:
                                                                 tf.TensorSpec(shape=(3,), dtype=tf.int32),
                                                                 tf.TensorSpec(shape=(None,None,3), dtype=tf.float32),
                                                                 tf.TensorSpec(shape=(12+self.config.NUM_CLASSES,), dtype=tf.float32),
-                                                                tf.TensorSpec(shape=(4,), dtype=tf.float32),\
-                                                                tf.TensorSpec(shape=(None,4), dtype=tf.float32)))\
-                                    .batch(self.config.BATCH_SIZE,num_parallel_calls=tf.data.AUTOTUNE, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+                                                                tf.TensorSpec(shape=(4,), dtype=tf.float32)))\
+                                    .batch(self.config.BATCH_SIZE,num_parallel_calls=tf.data.AUTOTUNE).prefetch(tf.data.AUTOTUNE)
 
         pbar = tqdm(unit='step', total = tqdm_total)
         with self.mirrored_strategy.scope():
@@ -80,16 +79,16 @@ class Detector:
     
     @tf.function
     def detect_step(self, dist_input):
-        def step_fn(pathes, image_shapes, molded_images, image_metas, windows, anchors):
+        def step_fn(pathes, image_shapes, molded_images, image_metas, windows):
             # Validate image sizes
             # All images in a batch MUST be of the same size
-            image_shape = tf.shape(molded_images[0])
+            image_shape = tf.shape(molded_images)[1:]
             for g in molded_images[1:]:
                 tf.debugging.assert_equal(tf.shape(g), image_shape,"After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes.")
 
             # Run object detection
             detections, _, _, mrcnn_mask, _, _, _ =\
-                self.model(molded_images, image_metas, anchors, training=False)
+                self.model(molded_images, image_metas,training=False)
             
             return pathes, image_shapes, detections, mrcnn_mask, molded_images, windows
 
@@ -201,10 +200,8 @@ class Detector:
             if image.shape[-1] == 4:
                 image = image[..., :3]
             molded_image, image_meta, window = self.mold_inputs(image)
-            # Anchors
-            anchors = self.model.get_anchors(molded_image.shape)
             
-            yield path, image.shape, molded_image, image_meta, window, anchors
+            yield path, image.shape, molded_image, image_meta, window
 
     def post_proceccing(self,pathes, image_shapes, detections, mrcnn_mask, molded_shapes ,windows):
         pathes = np.concatenate(pathes, 0)
@@ -222,12 +219,15 @@ class Detector:
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                     shape, molded_shapes[i],
                                     windows[i])
-            results.append({
-                "path": path,
-                "rois": final_rois, # x1,y1,x2,y2
-                "classes": [self.classes[id] for id in final_class_ids],
-                "class_ids": final_class_ids,
-                "scores": final_scores,
-                "masks": final_masks,
-            })
+            if final_rois.shape[0]==0:
+                continue
+            else:
+                results.append({
+                    "path": path,
+                    "rois": final_rois, # x1,y1,x2,y2
+                    "classes": [self.classes[id] for id in final_class_ids],
+                    "class_ids": final_class_ids,
+                    "scores": final_scores,
+                    "masks": final_masks,
+                })
         return results

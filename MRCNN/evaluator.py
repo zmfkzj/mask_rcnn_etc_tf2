@@ -25,15 +25,16 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
+        # self.eval(limit_step=3, iouType='bbox')
 
-    def eval(self, save_dir=None, limit_step=-1)->dict:
+    def eval(self, save_dir=None, limit_step=-1, iouType='segm')->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
 
         results_per_class = defaultdict(OrderedDict)
         for class_id, cat_name in enumerate(self.classes):
             if cat_name=='BG':
                 continue
-            true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections)
+            true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections, iouType=iouType)
             metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
                         'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
             for metric_name, metric_fn in metrics.items():
@@ -47,7 +48,7 @@ class Evaluator(Detector):
     
         results_for_all = {metric_name:np.mean(list(metric_per_class.values())) for metric_name, metric_per_class in results_per_class.items()}
 
-        metrics_head = [f'mAP50',f'Recall{self.conf_thresh*100}',f'Precision{self.conf_thresh*100}',f'F1-Score{self.conf_thresh*100}']
+        metrics_head = [f'mAP50',f'Recall{int(self.conf_thresh*100)}',f'Precision{int(self.conf_thresh*100)}',f'F1-Score{int(self.conf_thresh*100)}']
         df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
         df_for_all = pd.DataFrame({'total':results_for_all}).T.rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
 
@@ -59,10 +60,11 @@ class Evaluator(Detector):
         return results_for_all
 
     
-    def get_state(self, class_id, detections):
+    def get_state(self, class_id, detections,iouType='segm'):
         '''
         detections's keys: "path"(related path), "rois"(x1,y1,x2,y2), "classes", "class_ids", "scores", "masks"
         '''
+        assert iouType in ['bbox', 'segm']
         coco_detections = self.build_coco_results(detections)
         if not coco_detections:
             return [],[],[],0
@@ -70,7 +72,7 @@ class Evaluator(Detector):
         coco_image_ids = [self.image_filename_id[det['path']] for det in detections]
 
         # Evaluate
-        cocoEval = COCOeval(self.coco, coco_results, 'segm')
+        cocoEval = COCOeval(self.coco, coco_results,iouType=iouType)
         cocoEval.params.imgIds = coco_image_ids
         cocoEval.params.catIds = class_id
         cocoEval.evaluate()
@@ -114,9 +116,6 @@ class Evaluator(Detector):
         results = []
         for det in detections:
             image_path, rois, _, class_ids, scores, masks = det.values()
-            if rois.size==0:
-                continue
-
             image_id = self.image_filename_id[image_path]
             # Loop through detections
             for i in range(rois.shape[0]):
