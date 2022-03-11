@@ -19,8 +19,8 @@ class RPN(KM.Model):
         # where depth is [x, y, log(w), log(h)]
         self.conv3 = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
 
-        # self.rpn_class_logits = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))
-        # self.rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))
+        self.rpn_class_logits = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))
+        self.rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))
         
 
     def call(self, feature_map):
@@ -46,8 +46,7 @@ class RPN(KM.Model):
         x = self.conv2(shared)
 
         # Reshape to [batch, anchors, 2]
-        # rpn_class_logits = self.rpn_class_logits(x)
-        rpn_class_logits = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))(x)
+        rpn_class_logits = self.rpn_class_logits(x)
 
         # Softmax on last dimension of BG/FG.
         rpn_probs = KL.Activation( "softmax", name="rpn_class_xxx")(rpn_class_logits)
@@ -57,7 +56,6 @@ class RPN(KM.Model):
         x = self.conv3(shared)
 
         # Reshape to [batch, anchors, 4]
-        # rpn_bbox = self.rpn_bbox(x)
-        rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))(x)
+        rpn_bbox = self.rpn_bbox(x)
 
         return [rpn_class_logits, rpn_probs, rpn_bbox]

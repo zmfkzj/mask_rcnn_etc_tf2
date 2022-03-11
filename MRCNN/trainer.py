@@ -16,7 +16,6 @@ class Trainer:
                         val_evaluator:Evaluator = None,
                         optimizer = keras.optimizers.SGD(),
                         config:Config = Config(),
-                        augment = False,
                         augmentation = None,
                         logs_dir='logs/'):
         self.config = config
@@ -32,7 +31,7 @@ class Trainer:
             self.optimizer = optimizer
             self.model = model
             self.dataset = self.mirrored_strategy.experimental_distribute_dataset(
-                                    tf.data.Dataset.from_generator(lambda : data_generator(dataset, config, augment=augment, augmentation=augmentation, batch_size=config.BATCH_SIZE),
+                                    tf.data.Dataset.from_generator(lambda : data_generator(dataset, config, augmentation=augmentation, batch_size=config.BATCH_SIZE),
                                                     output_types=(((tf.float32, tf.float64, tf.int32, tf.float64, tf.int32, tf.int32, tf.bool),()))).prefetch(tf.data.AUTOTUNE))
 
     def train(self, max_epoch, layers):

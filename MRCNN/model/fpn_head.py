@@ -28,7 +28,7 @@ class FPN_classifier(KM.Model):
         self.bbox = KL.TimeDistributed(KL.Dense(num_classes * 4, activation='linear'), name='mrcnn_bbox_fc')
 
         self.shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")
-        self.mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(tf.shape(t)[0], tf.shape(t)[1], self.num_classes, 4),name="mrcnn_bbox"))
+        self.mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(tf.shape(t)[0], tf.shape(t)[1], self.num_classes, 4)),name="mrcnn_bbox")
 
     def call(self, rois, feature_maps, image_meta, train_bn=True):
         """Builds the computation graph of the feature pyramid network classifier

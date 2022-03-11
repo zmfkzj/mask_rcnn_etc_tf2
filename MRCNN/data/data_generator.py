@@ -6,7 +6,7 @@ from MRCNN import utils
 from ..model_utils.data_formatting import compose_image_meta, mold_image
 
 
-def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
+def load_image_gt(dataset, config, image_id, augmentation=None,
                   use_mini_mask=False):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 
@@ -41,14 +41,6 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
     mask = utils.resize_mask(mask, scale, padding, crop)
-
-    # Random horizontal flips.
-    # TODO: will be removed in a future update in favor of augmentation
-    if augment:
-        logging.warning("'augment' is deprecated. Use 'augmentation' instead.")
-        if random.randint(0, 1):
-            image = np.fliplr(image)
-            mask = np.fliplr(mask)
 
     # Augmentation
     # This requires the imgaug lib (https://github.com/aleju/imgaug)
@@ -450,7 +442,7 @@ def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
     return rois
 
 
-def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
+def data_generator(dataset, config, shuffle=True, augmentation=None,
                    random_rois=0, batch_size=1, detection_targets=False,
                    no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
@@ -522,12 +514,12 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                load_image_gt(dataset, config, image_id, augment=augment,
+                load_image_gt(dataset, config, image_id,
                               augmentation=None,
                               use_mini_mask=config.USE_MINI_MASK)
             else:
                 image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
-                    load_image_gt(dataset, config, image_id, augment=augment,
+                    load_image_gt(dataset, config, image_id,
                                 augmentation=augmentation,
                                 use_mini_mask=config.USE_MINI_MASK)
 
