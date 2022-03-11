@@ -74,7 +74,8 @@ class Trainer:
                         break
 
                     pbar.update()
-                    pbar.set_postfix({'total_loss':total_loss.numpy()})
+                    pbar.set_postfix({'total_loss':total_loss.numpy(),
+                                       'lr': self.optimizer._decayed_lr('float32').numpy()})
             pbar.close()
             self.ckpt_mng.save()
 
@@ -120,15 +121,15 @@ class Trainer:
                         rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask):
 
         rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-                                        * KL.Lambda(lambda x: rpn_class_loss_graph(*x))([input_rpn_match, rpn_class_logits]), keepdims=True)
+                                        * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
         rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                        * KL.Lambda(lambda x: rpn_bbox_loss_graph(self.config,*x))([input_rpn_bbox, input_rpn_match, rpn_bbox]), keepdims=True)
+                                        * rpn_bbox_loss_graph(self.config,input_rpn_bbox, input_rpn_match, rpn_bbox), keepdims=True)
         class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
-                                    * KL.Lambda(lambda x: mrcnn_class_loss_graph(*x))([target_class_ids, mrcnn_class_logits, active_class_ids]), keepdims=True)
+                                    * mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits, active_class_ids), keepdims=True)
         bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
-                                    * KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x))([target_bbox, target_class_ids, mrcnn_bbox]), keepdims=True)
+                                    * mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox), keepdims=True)
         mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
-                                    * KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x))([target_mask, target_class_ids, mrcnn_mask]), keepdims=True)
+                                    * mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask), keepdims=True)
         
         reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                                             for w in self.model.trainable_weights

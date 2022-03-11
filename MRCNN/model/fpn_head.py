@@ -62,8 +62,7 @@ class FPN_classifier(KM.Model):
         x = self.timedist_bn_2(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
-        # shared = self.shared(x)
-        shared = tf.squeeze(tf.squeeze(x, 3), 2, name="pool_squeeze")
+        shared = self.shared(x)
 
         # Classifier head
         mrcnn_class_logits = self.class_logits(shared)
@@ -73,9 +72,7 @@ class FPN_classifier(KM.Model):
         # [batch, num_rois, NUM_CLASSES * (dy, dx, log(dh), log(dw))]
         x = self.bbox(shared)
         # Reshape to [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
-        # mrcnn_bbox = KL.Reshape((s[1], self.num_classes, 4), name="mrcnn_bbox")(x)
-        # mrcnn_bbox = self.mrcnn_bbox(x)
-        mrcnn_bbox = tf.reshape(x,(tf.shape(x)[0], tf.shape(x)[1], self.num_classes, 4),name="mrcnn_bbox")
+        mrcnn_bbox = self.mrcnn_bbox(x)
 
         return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 

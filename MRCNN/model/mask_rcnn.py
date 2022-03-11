@@ -128,7 +128,7 @@ class MaskRCNN(KM.Model):
                 return output
 
         # # Anchors
-        anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+        anchors = KL.Lambda(lambda t: tf.broadcast_to(t, tf.concat([(batch_size,),tf.shape(t)],-1)))(self.anchors)
         # if training:
         #     anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
         #     # A hack to get around Keras's bad support for constants
@@ -162,11 +162,11 @@ class MaskRCNN(KM.Model):
 
         if training:
             # Normalize coordinates
-            gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
+            gt_boxes = KL.Lambda(lambda t: norm_boxes_graph(tf.cast(t,tf.float32), input_image.shape[1:3]))(input_gt_boxes)
 
             if not self.config.USE_RPN_ROIS:
                 # Normalize coordinates
-                target_rois = norm_boxes_graph(tf.cast(input_rois,tf.float32), input_image.shape[1:3])
+                target_rois = KL.Lambda(lambda t:norm_boxes_graph(tf.cast(t,tf.float32), input_image.shape[1:3]))(input_rois)
             else:
                 target_rois = rpn_rois
 
