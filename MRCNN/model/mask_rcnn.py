@@ -9,7 +9,7 @@ from tqdm import trange
 from MRCNN import utils
 from MRCNN.config import Config
 from . import Resnet, FPN_classifier, FPN_mask, RPN
-from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, AnchorsLayer
+from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..utils import log, compute_backbone_shapes
 

@@ -1,4 +1,3 @@
-from .anchors import AnchorsLayer
 from .detection import DetectionLayer
 from .detection_target import DetectionTargetLayer
 from .proposal import ProposalLayer
