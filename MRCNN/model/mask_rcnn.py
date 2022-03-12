@@ -67,6 +67,8 @@ class MaskRCNN(KM.Model):
         self.norm_boxes_layer_1 = KL.Lambda(lambda t: norm_boxes_graph(tf.cast(t[0],tf.float32), t[1].shape[1:3])) 
         self.norm_boxes_layer_2 = KL.Lambda(lambda t: norm_boxes_graph(tf.cast(t[0],tf.float32), t[1].shape[1:3])) 
 
+        self.proposal_layer = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)
+
     def call(self, input_image, 
                     input_image_meta=None, 
                     input_gt_class_ids=None, 
@@ -132,13 +134,7 @@ class MaskRCNN(KM.Model):
                 return output
 
         # # Anchors
-        anchors = self.anchor_layer(self.anchors,batch_size)
-        # if training:
-        #     anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
-        #     # A hack to get around Keras's bad support for constants
-        #     anchors = AnchorsLayer(anchors, name='anchors')
-        # else:
-        #     anchors = self.anchors
+        anchors = self.anchor_layer([self.anchors,batch_size])
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -157,11 +153,7 @@ class MaskRCNN(KM.Model):
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
         # and zero padded.
         proposal_count = self.config.POST_NMS_ROIS_TRAINING if training else self.config.POST_NMS_ROIS_INFERENCE
-        rpn_rois = ProposalLayer(
-            proposal_count=proposal_count,
-            nms_threshold=self.config.RPN_NMS_THRESHOLD,
-            name="ROI",
-            config=self.config)([rpn_class, rpn_bbox, anchors])
+        rpn_rois = self.proposal_layer([rpn_class, rpn_bbox, anchors, proposal_count])
         
 
         if training:

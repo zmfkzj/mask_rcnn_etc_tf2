@@ -68,10 +68,9 @@ class ProposalLayer(KL.Layer):
         Proposals in normalized coordinates [batch, rois, (y1, x1, y2, x2)]
     """
 
-    def __init__(self, proposal_count, nms_threshold, config=None, **kwargs):
+    def __init__(self, nms_threshold, config=None, **kwargs):
         super(ProposalLayer, self).__init__(**kwargs)
         self.config = config
-        self.proposal_count = proposal_count
         self.nms_threshold = nms_threshold
 
     def call(self, inputs):
@@ -82,6 +81,7 @@ class ProposalLayer(KL.Layer):
         deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4])
         # Anchors
         anchors = inputs[2]
+        proposal_count = inputs[3]
 
         # Improve performance by trimming to top anchors by score
         # and doing the rest on the smaller subset.
@@ -114,11 +114,11 @@ class ProposalLayer(KL.Layer):
             boxes = inputs[0]
             scores = inputs[1]
             indices = tf.image.non_max_suppression(
-                boxes, scores, self.proposal_count,
+                boxes, scores, proposal_count,
                 self.nms_threshold, name="rpn_non_max_suppression")
             proposals = tf.gather(boxes, indices)
             # Pad if needed
-            padding = tf.maximum(self.proposal_count - tf.shape(proposals)[0], 0)
+            padding = tf.maximum(proposal_count - tf.shape(proposals)[0], 0)
             proposals = tf.pad(proposals, [(0, padding), (0, 0)])
             return proposals
         proposals = tf.map_fn(nms,[boxes, scores], dtype=tf.float32)
