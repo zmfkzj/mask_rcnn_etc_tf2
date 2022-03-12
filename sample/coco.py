@@ -1,5 +1,6 @@
 import tensorflow as tf
 import tensorflow.keras as keras
+import imgaug.augmenters as iaa
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
 for gpu in gpus:
@@ -33,6 +34,14 @@ manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=N
 status = ckpt.restore(manager.latest_checkpoint)
 
 val_evaluator = Evaluator(model, 'C:/coco/val2017/', 'C:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25)
+augmentation = iaa.Sequential([
+    iaa.Fliplr(0.5),
+    iaa.GaussianBlur(),
+    iaa.Add(per_channel=True),
+    iaa.Multiply(per_channel=True),
+    iaa.GammaContrast(per_channel=True)
+
+])
 trainer = Trainer(model, train_dataset, manager, config=train_config, optimizer=optimizer, val_evaluator=val_evaluator)
 trainer.train(160, 'all')
 trainer.train(90, '4+')
