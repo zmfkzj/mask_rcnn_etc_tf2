@@ -25,7 +25,7 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
-        # self.eval(limit_step=100, iouType='bbox')
+        # self.eval(limit_step=50, iouType='bbox')
 
     def eval(self, save_dir=None, limit_step=-1, iouType='segm')->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)

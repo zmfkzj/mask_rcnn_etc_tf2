@@ -1,7 +1,6 @@
-from distutils.command.config import config
 import re
-from numpy import float32
 import tensorflow as tf
+import tensorflow.keras as keras
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
 
@@ -191,8 +190,18 @@ class MaskRCNN(KM.Model):
                                         * mrcnn_bbox_loss_graph(*t), keepdims=True))([target_bbox, target_class_ids, mrcnn_bbox])
             mask_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
                                         * mrcnn_mask_loss_graph(*t), keepdims=True))([target_mask, target_class_ids, mrcnn_mask])
+            reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                                                for w in self.trainable_weights
+                                                if 'gamma' not in w.name and 'beta' not in w.name])
 
-            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+            self.add_loss(reg_losses)
+            self.add_loss(rpn_class_loss)
+            self.add_loss(rpn_bbox_loss)
+            self.add_loss(class_loss)
+            self.add_loss(bbox_loss)
+            self.add_loss(mask_loss)
+
+            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses]
 
         else:
             # Network Heads

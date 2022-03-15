@@ -1,12 +1,11 @@
 import tensorflow as tf
 import tensorflow.keras as keras
-import tensorflow.keras.layers as KL
 
+import numpy as np
 from tqdm import tqdm
 
 from .evaluator import Evaluator
 from MRCNN.config import Config
-from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.data.data_generator import data_generator
 
 
@@ -60,8 +59,9 @@ class Trainer:
             with self.mirrored_strategy.scope():
                 for i, inputs in enumerate(self.dataset):
                     if self.config.STEPS_PER_EPOCH > i:
-                        mean_losses = self.train_step(inputs)
-                        (rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss), reg_losses, total_loss= mean_losses
+                        losses = self.train_step(inputs)
+                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses= losses
+                        mean_loss = np.mean([loss.numpy() for loss in losses])
 
                         with self.summary_writer.as_default():
                             tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
@@ -70,12 +70,11 @@ class Trainer:
                             tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
-                            tf.summary.scalar('total_loss', total_loss, step=self.optimizer.iterations)
                     else:
                         break
 
                     pbar.update()
-                    pbar.set_postfix({'total_loss':total_loss.numpy(),
+                    pbar.set_postfix({'mean_loss':mean_loss,
                                        'lr': self.optimizer._decayed_lr('float32').numpy()})
             pbar.close()
             self.ckpt_mng.save()
@@ -104,23 +103,11 @@ class Trainer:
                                     input_gt_masks=input_gt_masks, 
                                     input_rois = None,
                                     training=True)
-                reg_losses, total_loss = self.cal_loss(outputs)
             
-            grads = tape.gradient(total_loss, self.model.trainable_variables)
+            grads = tape.gradient(self.model.losses, self.model.trainable_variables)
             self.optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
-            return outputs, reg_losses, total_loss
+            return outputs
         
         per_example_losses = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
         mean_losses = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
         return mean_losses
-    
-    @tf.function
-    def cal_loss(self, outputs):
-        rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = outputs
-        reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                                            for w in self.model.trainable_weights
-                                            if 'gamma' not in w.name and 'beta' not in w.name])
-
-        total_loss = tf.reduce_sum([rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses])
-
-        return reg_losses, total_loss
