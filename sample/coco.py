@@ -31,6 +31,7 @@ optimizer = keras.optimizers.SGD(learning_rate=lr_schedule,
 
 ckpt = tf.train.Checkpoint(optimizer=optimizer, model=model)
 manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+# status = ckpt.restore('save_model/ckpt-1')
 status = ckpt.restore(manager.latest_checkpoint)
 
 val_evaluator = Evaluator(model, 'C:/coco/val2017/', 'C:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25)

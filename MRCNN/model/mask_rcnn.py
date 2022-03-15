@@ -1,13 +1,14 @@
 from distutils.command.config import config
 import re
+from numpy import float32
 import tensorflow as tf
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
-import numpy as np
-from tqdm import trange
 
 from MRCNN import utils
 from MRCNN.config import Config
+from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
+from MRCNN.layer.roialign import parse_image_meta_graph
 from . import Resnet, FPN_classifier, FPN_mask, RPN
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer
 from ..model_utils.miscellenous_graph import norm_boxes_graph
@@ -71,6 +72,8 @@ class MaskRCNN(KM.Model):
 
     def call(self, input_image, 
                     input_image_meta=None, 
+                    input_rpn_match=None, 
+                    input_rpn_bbox=None,
                     input_gt_class_ids=None, 
                     input_gt_boxes=None, 
                     input_gt_masks=None, 
@@ -82,6 +85,7 @@ class MaskRCNN(KM.Model):
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
         batch_size = input_image.shape[0]
+        active_class_ids = KL.Lambda(lambda t: parse_image_meta_graph(t))(input_image_meta)["active_class_ids"]
         if callable(self.config.BACKBONE):
             _, C2, C3, C4, C5 = self.config.BACKBONE(input_image, train_bn=self.config.TRAIN_BN)
         else:
@@ -114,14 +118,12 @@ class MaskRCNN(KM.Model):
             rpn_bbox = tf.zeros([batch_size,rpn_count,4], dtype=tf.float32)
             
             if training:
-                rpn_class_logits = tf.zeros([batch_size,rpn_count,2], dtype=tf.float32)
-                target_class_ids = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10)], dtype=tf.float32)
-                mrcnn_class_logits = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.NUM_CLASSES], dtype=tf.float32)
-                target_bbox = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),4], dtype=tf.float32)
-                mrcnn_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1],self.config.NUM_CLASSES], dtype=tf.float32)
-                mrcnn_bbox = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.NUM_CLASSES,4], dtype=tf.float32)
-                target_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_TRAINING/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1]], dtype=tf.float32)
-                output = [rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask]
+                rpn_class_loss = tf.zeros((), dtype=tf.float32)
+                rpn_bbox_loss = tf.zeros((), dtype=tf.float32)
+                class_loss = tf.zeros((), dtype=tf.float32)
+                bbox_loss = tf.zeros((), dtype=tf.float32)
+                mask_loss = tf.zeros((), dtype=tf.float32)
+                output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
                 return output
             else:
                 detections = tf.zeros([batch_size,self.config.DETECTION_MAX_INSTANCES,6], dtype=tf.float32)
@@ -178,7 +180,19 @@ class MaskRCNN(KM.Model):
 
             mrcnn_mask = self.fpn_mask(rois, mrcnn_feature_maps, input_image_meta, train_bn=self.config.TRAIN_BN)
 
-            output = [rpn_class_logits, rpn_bbox, target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox, target_mask, mrcnn_mask]
+            
+            rpn_class_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
+                                            * rpn_class_loss_graph(*t), keepdims=True))([input_rpn_match, rpn_class_logits])
+            rpn_bbox_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
+                                            * rpn_bbox_loss_graph(*t), keepdims=True))([self.config,input_rpn_bbox, input_rpn_match, rpn_bbox])
+            class_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
+                                        * mrcnn_class_loss_graph(*t), keepdims=True))([target_class_ids, mrcnn_class_logits, active_class_ids])
+            bbox_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
+                                        * mrcnn_bbox_loss_graph(*t), keepdims=True))([target_bbox, target_class_ids, mrcnn_bbox])
+            mask_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
+                                        * mrcnn_mask_loss_graph(*t), keepdims=True))([target_mask, target_class_ids, mrcnn_mask])
+
+            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
 
         else:
             # Network Heads
