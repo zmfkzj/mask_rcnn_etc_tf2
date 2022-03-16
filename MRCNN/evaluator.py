@@ -25,36 +25,47 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
-        # self.eval(limit_step=50, iouType='bbox')
+        self.eval(limit_step=50, iouType='bbox', per_class=False)
 
-    def eval(self, save_dir=None, limit_step=-1, iouType='segm')->dict:
+    def eval(self, save_dir=None, limit_step=-1, iouType='segm', per_class=True)->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
 
-        results_per_class = defaultdict(OrderedDict)
-        for class_id, cat_name in enumerate(self.classes):
-            if cat_name=='BG':
-                continue
-            true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections, iouType=iouType)
-            metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
-                        'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
-            for metric_name, metric_fn in metrics.items():
-                metric_fn.reset_state()
-                metric_fn.update_state(true, pred, sample_weight)
-                results_per_class[metric_name][cat_name] = np.round(metric_fn.result().numpy(), 4)
-            results_per_class['mAP'][cat_name] = np.nan if mAP50==-1 else mAP50
+        results_for_all = {}
+        source_class_ids = {self.dataset.get_source_class_id(class_id, 'coco'):cat_name for class_id, cat_name in enumerate(self.classes) if cat_name!='BG'}
+        true, pred, sample_weight,mAP50 = self.get_state(source_class_ids, detections, iouType=iouType)
+        metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
+                    'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
+        for metric_name, metric_fn in metrics.items():
+            metric_fn.reset_state()
+            metric_fn.update_state(true, pred, sample_weight)
+            results_for_all[metric_name] = np.round(metric_fn.result().numpy(), 4)
+        results_for_all['mAP'] = np.nan if mAP50==-1 else mAP50
+        results_for_all['F1-Score'] = 2*results_for_all['recall']*results_for_all['precision']/(results_for_all['recall']+results_for_all['precision'])
 
+        if per_class:
+            results_per_class = defaultdict(OrderedDict)
+            for class_id, cat_name in source_class_ids:
+                if cat_name=='BG':
+                    continue
+                true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections, iouType=iouType)
+                metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
+                            'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
+                for metric_name, metric_fn in metrics.items():
+                    metric_fn.reset_state()
+                    metric_fn.update_state(true, pred, sample_weight)
+                    results_per_class[metric_name][cat_name] = np.round(metric_fn.result().numpy(), 4)
+                results_per_class['mAP'][cat_name] = np.nan if mAP50==-1 else mAP50
 
-        results_per_class['F1-Score'] = self.cal_F1(results_per_class)
+            results_per_class['F1-Score'] = self.cal_F1(results_per_class)
+            df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
     
-        results_for_all = {metric_name:np.mean(list(metric_per_class.values())) for metric_name, metric_per_class in results_per_class.items()}
-
         metrics_head = [f'mAP50',f'Recall{int(self.conf_thresh*100)}',f'Precision{int(self.conf_thresh*100)}',f'F1-Score{int(self.conf_thresh*100)}']
-        df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
         df_for_all = pd.DataFrame({'total':results_for_all}).T.rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
 
         if save_dir is not None:
             with pd.ExcelWriter(Path(save_dir)/'results.xlsx') as writer:
-                df_per_class.to_excel(writer, sheet_name='per_class',encoding='euc-kr')
+                if per_class:
+                    df_per_class.to_excel(writer, sheet_name='per_class',encoding='euc-kr')
                 df_for_all.to_excel(writer, sheet_name='for_all',encoding='euc-kr')
 
         return results_for_all
@@ -74,7 +85,7 @@ class Evaluator(Detector):
         # Evaluate
         cocoEval = COCOeval(self.coco, coco_results,iouType=iouType)
         cocoEval.params.imgIds = coco_image_ids
-        cocoEval.params.catIds = class_id
+        cocoEval.params.catIds = list(class_id.keys())
         cocoEval.evaluate()
         cocoEval.accumulate()
         cocoEval.summarize()
@@ -87,9 +98,10 @@ class Evaluator(Detector):
                 gtIds:list = img['gtIds']
                 dtScores = img['dtScores']
                 dtMatches = img['dtMatches'][self.iou_idx]
+                cat_id = img['category_id']
 
-                _true, _pred, _sample_weight = zip(*([(1,1,0) if gtId in dtMatches else (1,0,1) for gtId in gtIds] 
-                                                     + [(0,score,1) if gtId==0 else (1,score,1) for gtId, score in zip(dtMatches,dtScores)]))
+                _true, _pred, _sample_weight = zip(*([(cat_id,1,0) if gtId in dtMatches else (cat_id,0,1) for gtId in gtIds] 
+                                                     + [(0,score,1) if gtId==0 else (cat_id,score,1) for gtId, score in zip(dtMatches,dtScores)]))
                 true.extend(_true)
                 pred.extend(_pred)
                 sample_weight.extend(_sample_weight)
@@ -106,7 +118,7 @@ class Evaluator(Detector):
         precision = np.array(list(results['precision'].values()))
         recall = np.array(list(results['recall'].values()))
         f1 = 2*(precision*recall)/(precision+recall)
-        f1 = np.where(np.isnan(f1), np.nan, np.round(f1))
+        f1 = np.where(np.isnan(f1), np.nan, np.round(f1, 4))
         return {cat_name:cat_f1 for cat_name, cat_f1 in zip(classes, f1)}
 
     def build_coco_results(self, detections):

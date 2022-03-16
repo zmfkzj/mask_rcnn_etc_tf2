@@ -206,7 +206,7 @@ class DetectionTargetLayer(KL.Layer):
         self.config = config
         self.detection_targets_graph = Detection_targets()
 
-    def call(self, inputs, batch_size):
+    def call(self, inputs):
         proposals = inputs[0]
         gt_class_ids = inputs[1]
         gt_boxes = inputs[2]

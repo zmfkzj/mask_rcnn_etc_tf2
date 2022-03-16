@@ -171,7 +171,7 @@ class MaskRCNN(KM.Model):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks],batch_size)
+            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -180,16 +180,16 @@ class MaskRCNN(KM.Model):
             mrcnn_mask = self.fpn_mask(rois, mrcnn_feature_maps, input_image_meta, train_bn=self.config.TRAIN_BN)
 
             
-            rpn_class_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-                                            * rpn_class_loss_graph(*t), keepdims=True))([input_rpn_match, rpn_class_logits])
-            rpn_bbox_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                            * rpn_bbox_loss_graph(*t), keepdims=True))([self.config,input_rpn_bbox, input_rpn_match, rpn_bbox])
-            class_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
-                                        * mrcnn_class_loss_graph(*t), keepdims=True))([target_class_ids, mrcnn_class_logits, active_class_ids])
-            bbox_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
-                                        * mrcnn_bbox_loss_graph(*t), keepdims=True))([target_bbox, target_class_ids, mrcnn_bbox])
-            mask_loss = KL.Lambda(lambda t: tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
-                                        * mrcnn_mask_loss_graph(*t), keepdims=True))([target_mask, target_class_ids, mrcnn_mask])
+            rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
+                                            * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
+            rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
+                                            * rpn_bbox_loss_graph(self.config,input_rpn_bbox, input_rpn_match, rpn_bbox), keepdims=True)
+            class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
+                                        * mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits, active_class_ids), keepdims=True)
+            bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
+                                        * mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox), keepdims=True)
+            mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
+                                        * mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask), keepdims=True)
             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                                                 for w in self.trainable_weights
                                                 if 'gamma' not in w.name and 'beta' not in w.name])
@@ -237,7 +237,7 @@ class MaskRCNN(KM.Model):
 
         for layer in layers:
             # Is the layer a model?
-            if layer.__class__.__name__ == 'Model':
+            if isinstance(layer, KM.Model):
                 print("In model: ", layer.name)
                 self.set_trainable(
                     layer_regex, keras_model=layer, indent=indent + 4)

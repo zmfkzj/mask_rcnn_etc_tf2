@@ -80,7 +80,7 @@ class Trainer:
             self.ckpt_mng.save()
 
             if self.val_evaluator is not None:
-                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS)
+                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS, iouType='segm', per_class=False)
                 with self.summary_writer.as_default():
                     tf.summary.scalar('val_mAP', val_metric['mAP'], step=self.optimizer.iterations)
                     tf.summary.scalar('val_recall', val_metric['recall'], step=self.optimizer.iterations)
