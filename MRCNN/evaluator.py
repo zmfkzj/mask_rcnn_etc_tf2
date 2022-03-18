@@ -14,25 +14,26 @@ from pycocotools import mask as maskUtils
 from collections import OrderedDict,defaultdict
 
 class Evaluator(Detector):
-    def __init__(self, model, gt_image_dir, gt_json_path, config: Config = Config(), conf_thresh=0.25, iou_thresh=0.5) -> None:
+    def __init__(self, model, gt_image_dir, gt_json_path, config: Config = Config(), conf_thresh=0.25, iou_thresh=0.5, iouType='bbox') -> None:
         assert iou_thresh in np.arange(0.5,1,0.05)
         self.iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[iou_thresh]
         self.config = config
         self.gt_image_dir = gt_image_dir
         self.conf_thresh = conf_thresh
+        self.iouType = iouType
         self.dataset = CocoDataset()
         self.coco = self.dataset.load_coco(gt_image_dir, gt_json_path, return_coco=True)
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
-        self.eval(limit_step=50, iouType='bbox', per_class=False)
+        # self.eval(limit_step=50, iouType='bbox', per_class=False)
 
-    def eval(self, save_dir=None, limit_step=-1, iouType='segm', per_class=True)->dict:
+    def eval(self, save_dir=None, limit_step=-1, iouType=None, per_class=True)->dict:
         detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
 
         results_for_all = {}
         source_class_ids = {self.dataset.get_source_class_id(class_id, 'coco'):cat_name for class_id, cat_name in enumerate(self.classes) if cat_name!='BG'}
-        true, pred, sample_weight,mAP50 = self.get_state(source_class_ids, detections, iouType=iouType)
+        true, pred, sample_weight,mAP50 = self.get_state(source_class_ids, detections, iouType=iouType or self.iouType)
         metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
                     'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
         for metric_name, metric_fn in metrics.items():
@@ -71,7 +72,7 @@ class Evaluator(Detector):
         return results_for_all
 
     
-    def get_state(self, class_id, detections,iouType='segm'):
+    def get_state(self, class_id, detections, iouType):
         '''
         detections's keys: "path"(related path), "rois"(x1,y1,x2,y2), "classes", "class_ids", "scores", "masks"
         '''

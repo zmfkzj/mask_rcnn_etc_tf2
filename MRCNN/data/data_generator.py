@@ -1,12 +1,12 @@
-import random
 import logging
 import numpy as np
+import imgaug.augmenters as iaa
 
 from MRCNN import utils
 from ..model_utils.data_formatting import compose_image_meta, mold_image
 
 
-def load_image_gt(dataset, config, image_id, augmentation=None,
+def load_image_gt(dataset, config, image_id, augmentation:iaa.Sequential=None,
                   use_mini_mask=False):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 

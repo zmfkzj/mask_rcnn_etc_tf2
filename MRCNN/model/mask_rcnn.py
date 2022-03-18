@@ -279,3 +279,24 @@ class MaskRCNN(KM.Model):
             # Normalize coordinates
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
+
+
+    # def load_weights(self, filepath):
+    #     """Modified version of the corresponding Keras function with
+    #     the addition of multi-GPU support and the ability to exclude
+    #     some layers from loading.
+    #     exclude: list of layer names to exclude
+    #     """
+    #     import h5py
+
+    #     f = h5py.File(filepath, mode='r')
+    #     if 'layer_names' not in f.attrs and 'model_weights' in f:
+    #         f = f['model_weights']
+
+    #     # In multi-GPU training, we wrap the model. Get layers
+    #     # of the inner model because they have the weights.
+    #     layers = self.layers if hasattr(self, "inner_model")\
+    #         else self.layers
+
+    #     f.close()
+    #     return self

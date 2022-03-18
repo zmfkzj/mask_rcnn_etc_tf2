@@ -1,3 +1,6 @@
+logs*
+save_model*
+mask_rcnn_coco.h5
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

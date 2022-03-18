@@ -10,20 +10,22 @@ from MRCNN.data.data_generator import data_generator
 
 
 class Trainer:
-    def __init__(self, model, dataset, ckpt_mng:tf.train.CheckpointManager,
+    def __init__(self, model, dataset,
                         val_evaluator:Evaluator = None,
                         optimizer = keras.optimizers.SGD(),
                         config:Config = Config(),
                         augmentation = None,
-                        logs_dir='logs/'):
+                        logs_dir='logs/',
+                        pretrained_weights=None):
         self.config = config
         self.val_evaluator = val_evaluator
-        self.ckpt_mng = ckpt_mng
+        self.pretrained_weights = pretrained_weights
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
         
         self.mirrored_strategy = config.MIRRORED_STRATEGY
+
 
         with self.mirrored_strategy.scope():
             self.optimizer = optimizer
@@ -52,6 +54,20 @@ class Trainer:
         if layers in layer_regex.keys():
             layers = layer_regex[layers]
 
+        with self.mirrored_strategy.scope():
+            for inputs in self.dataset:
+                self.mirrored_strategy.run(self.model, args=(inputs[0],inputs[1]),kwargs={'training':False})
+                break
+
+        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
+        self.ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+        # status = ckpt.restore('save_model/ckpt-24')
+        latest_checkpoint = self.ckpt_mng.latest_checkpoint
+        status = ckpt.restore(latest_checkpoint)
+
+        if latest_checkpoint is None and self.pretrained_weights is not None:
+            self.model.load_weights(self.pretrained_weights,by_name=True)
+            print('pretrained weights loading complete.')
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):
@@ -80,7 +96,7 @@ class Trainer:
             self.ckpt_mng.save()
 
             if self.val_evaluator is not None:
-                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS, iouType='segm', per_class=False)
+                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS, iouType='bbox', per_class=False)
                 with self.summary_writer.as_default():
                     tf.summary.scalar('val_mAP', val_metric['mAP'], step=self.optimizer.iterations)
                     tf.summary.scalar('val_recall', val_metric['recall'], step=self.optimizer.iterations)
