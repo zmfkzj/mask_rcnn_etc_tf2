@@ -300,14 +300,6 @@ class MaskRCNN(KM.Model):
 
         return self
 
-def collect_models(model):
-    models = []
-    if isinstance(model, KM.Model):
-        models.append(model)
-        for layer in model.layers:
-            models.extend(collect_models(layer))
-    return models
-
 def collect_weighted_layers(model):
     layers = []
     if isinstance(model, KM.Model):
