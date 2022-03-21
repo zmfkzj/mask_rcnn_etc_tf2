@@ -16,20 +16,21 @@ class Trainer:
                         config:Config = Config(),
                         augmentation = None,
                         logs_dir='logs/',
-                        pretrained_weights=None):
+                        pretrained_weights=None,
+                        check_point=None):
         self.config = config
         self.val_evaluator = val_evaluator
         self.pretrained_weights = pretrained_weights
+        self.check_point = check_point
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
         
         self.mirrored_strategy = config.MIRRORED_STRATEGY
-
+        self.model = model
 
         with self.mirrored_strategy.scope():
             self.optimizer = optimizer
-            self.model = model
             self.dataset = tf.data.Dataset.from_generator(lambda : data_generator(dataset, config, augmentation=augmentation, batch_size=1),
                                                             output_types=(((tf.float32, tf.float64, tf.int32, tf.float64, tf.int32, tf.int32, tf.bool),())))\
                                             .batch(config.BATCH_SIZE)\
@@ -54,18 +55,18 @@ class Trainer:
         if layers in layer_regex.keys():
             layers = layer_regex[layers]
 
+
+        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
+        ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+        check_point = self.check_point or ckpt_mng.latest_checkpoint
+        status = ckpt.restore(check_point)
+
         with self.mirrored_strategy.scope():
             for inputs in self.dataset:
                 self.mirrored_strategy.run(self.model, args=(inputs[0],inputs[1]),kwargs={'training':False})
                 break
 
-        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
-        self.ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
-        # status = ckpt.restore('save_model/ckpt-24')
-        latest_checkpoint = self.ckpt_mng.latest_checkpoint
-        status = ckpt.restore(latest_checkpoint)
-
-        if latest_checkpoint is None and self.pretrained_weights is not None:
+        if check_point is None and self.pretrained_weights is not None:
             self.model.load_weights(self.pretrained_weights,by_name=True)
             print('pretrained weights loading complete.')
         self.model.set_trainable(layers)
@@ -93,7 +94,7 @@ class Trainer:
                     pbar.set_postfix({'mean_loss':mean_loss,
                                        'lr': self.optimizer._decayed_lr('float32').numpy()})
             pbar.close()
-            self.ckpt_mng.save()
+            ckpt_mng.save()
 
             if self.val_evaluator is not None:
                 val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS, iouType='bbox', per_class=False)

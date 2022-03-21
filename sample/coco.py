@@ -42,7 +42,7 @@ train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_tra
 
 model = MaskRCNN(train_config)
 
-lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 50000,0.1,1000, staircase=True)
+lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 30000,0.1,1000, staircase=True)
 
 optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, beta_1=train_config.LEARNING_MOMENTUM)
 # optimizer = keras.optimizers.SGD(learning_rate=lr_schedule, momentum=train_config.LEARNING_MOMENTUM)
@@ -59,16 +59,21 @@ augmentation = iaa.Sequential([
     iaa.GammaContrast(per_channel=True)
 
 ])
-trainer = Trainer(model, train_dataset, config=train_config, optimizer=optimizer, val_evaluator=val_evaluator, pretrained_weights='mask_rcnn_coco.h5')
-trainer.train(40, 'heads')
+trainer = Trainer(model, train_dataset, config=train_config, optimizer=optimizer, 
+                    val_evaluator=val_evaluator, pretrained_weights='mask_rcnn_coco.h5', check_point=None)
+# trainer.train(40, 'heads')
 trainer.train(90, '4+')
-trainer.train(160, 'all')
+# trainer.train(160, 'all')
 
 class ValConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
     IMAGES_PER_GPU = 20
+
+ckpt = tf.train.Checkpoint(optimizer=optimizer, model=model)
+manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+status = ckpt.restore(manager.latest_checkpoint)
 
 val_evaluator = Evaluator(model, 'C:/coco/val2017/', 'C:/coco/annotations/instances_val2017.json',ValConfig(), conf_thresh=0.25, iouType='bbox')
 metric = val_evaluator.eval(save_dir='d:/')

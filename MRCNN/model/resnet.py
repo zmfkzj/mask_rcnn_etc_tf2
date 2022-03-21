@@ -89,8 +89,8 @@ class Resnet(KM.Model):
         self.stage5 = stage5
 
         #stage1
-        self.stage1_conv = KL.Conv2D(64,(7,7),strides=(2,2),name='conv1', use_bias=True)
-        self.stage1_bn = KL.BatchNormalization(name='bn_conv1')
+        self.conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='conv1', use_bias=True)
+        self.bn_conv1 = KL.BatchNormalization(name='bn_conv1')
         #stage2
         self.stage2_conv = Conv_block([64,64,256], stage=2, block='a',strides=(1,1))
         self.stage2_identity_1 = Identity_block([64,64,256],stage=2, block='b')
@@ -115,8 +115,8 @@ class Resnet(KM.Model):
     def call(self, input_image, train_bn=True):
         #stage1
         x = KL.ZeroPadding2D(padding=(3,3))(input_image)
-        x = self.stage1_conv(x)
-        x = self.stage1_bn(x, training=train_bn)
+        x = self.conv1(x)
+        x = self.bn_conv1(x, training=train_bn)
         x = KL.ReLU()(x)
         C1 = x = KL.MaxPool2D((3,3), strides=(2,2),padding='same')(x)
         #stage2

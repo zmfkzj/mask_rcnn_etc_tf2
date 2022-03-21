@@ -36,21 +36,21 @@ class MaskRCNN(KM.Model):
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
         self.backbone = Resnet(config.BACKBONE, stage5=True)
-        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_RATIOS))
+        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
         self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_mask = FPN_mask(self.config.MASK_POOL_SIZE, self.config.NUM_CLASSES)
 
         # Top-down Layers
         # TODO: add assert to varify feature map sizes match what's in config
-        self.conv1 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c5p5')
-        self.conv2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c4p4')
-        self.conv3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c3p3')
-        self.conv4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c2p2')
+        self.fpn_c5p5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c5p5')
+        self.fpn_c4p4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c4p4')
+        self.fpn_c3p3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c3p3')
+        self.fpn_c2p2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c2p2')
         # Attach 3x3 conv to all P layers to get the final feature maps.
-        self.conv5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")
-        self.conv6 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p3")
-        self.conv7 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")
-        self.conv8 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")
+        self.fpn_p2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")
+        self.fpn_p3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p3")
+        self.fpn_p4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")
+        self.fpn_p5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")
 
         self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
 
@@ -58,8 +58,8 @@ class MaskRCNN(KM.Model):
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
 
-        self.detection_target_layer = DetectionTargetLayer(self.config, name="proposal_targets")
-        self.detection_layer = DetectionLayer(self.config, name="mrcnn_detection")
+        self.proposal_targets = DetectionTargetLayer(self.config, name="proposal_targets")
+        self.mrcnn_detection = DetectionLayer(self.config, name="mrcnn_detection")
 
         self.detection_boxes = KL.Lambda(lambda x: x[..., :4])
         self.anchor_layer = KL.Lambda(lambda t: tf.broadcast_to(t[0], tf.concat([(t[1],),tf.shape(t[0])],-1)))
@@ -67,7 +67,7 @@ class MaskRCNN(KM.Model):
         self.norm_boxes_layer_1 = KL.Lambda(lambda t: norm_boxes_graph(tf.cast(t[0],tf.float32), t[1].shape[1:3])) 
         self.norm_boxes_layer_2 = KL.Lambda(lambda t: norm_boxes_graph(tf.cast(t[0],tf.float32), t[1].shape[1:3])) 
 
-        self.proposal_layer = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)
+        self.ROI = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)
 
     def call(self, input_image, 
                     input_image_meta=None, 
@@ -92,18 +92,18 @@ class MaskRCNN(KM.Model):
 
         # Top-down Layers
         # TODO: add assert to varify feature map sizes match what's in config
-        P5 = self.conv1(C5)
+        P5 = self.fpn_c5p5(C5)
         P4 = KL.Add(name="fpn_p4add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(P5),
-                                        self.conv2(C4)])
+                                        self.fpn_c4p4(C4)])
         P3 = KL.Add(name="fpn_p3add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p4upsampled")(P4),
-                                        self.conv3(C3)])
+                                        self.fpn_c3p3(C3)])
         P2 = KL.Add(name="fpn_p2add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p3upsampled")(P3),
-                                        self.conv4(C2)])
+                                        self.fpn_c2p2(C2)])
         # Attach 3x3 conv to all P layers to get the final feature maps.
-        P2 = self.conv5(P2)
-        P3 = self.conv6(P3)
-        P4 = self.conv7(P4)
-        P5 = self.conv8(P5)
+        P2 = self.fpn_p2(P2)
+        P3 = self.fpn_p3(P3)
+        P4 = self.fpn_p4(P4)
+        P5 = self.fpn_p5(P5)
         # P6 is used for the 5th anchor scale in RPN. Generated by
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
@@ -154,7 +154,7 @@ class MaskRCNN(KM.Model):
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
         # and zero padded.
         proposal_count = self.config.POST_NMS_ROIS_TRAINING if training else self.config.POST_NMS_ROIS_INFERENCE
-        rpn_rois = self.proposal_layer([rpn_class, rpn_bbox, anchors, proposal_count])
+        rpn_rois = self.ROI([rpn_class, rpn_bbox, anchors, proposal_count])
         
 
         if training:
@@ -171,7 +171,7 @@ class MaskRCNN(KM.Model):
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask = self.detection_target_layer([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            rois, target_class_ids, target_bbox, target_mask = self.proposal_targets([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -211,7 +211,7 @@ class MaskRCNN(KM.Model):
             # Detections
             # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
             # normalized coordinates
-            detections = self.detection_layer([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+            detections = self.mrcnn_detection([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
             # Create masks for detections
             detection_boxes = self.detection_boxes(detections)
@@ -279,24 +279,40 @@ class MaskRCNN(KM.Model):
             # Normalize coordinates
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
+    
+    def load_weights(self, filepath, by_name=True):
+        """Modified version of the corresponding Keras function with
+        the addition of multi-GPU support and the ability to exclude
+        some layers from loading.
+        exclude: list of layer names to exclude
+        """
+        import h5py
+        import numpy as np
+        f = h5py.File(filepath, mode='r')
+        saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
+        weighted_layers = collect_weighted_layers(self)
+        for l in weighted_layers:
+            layer_name = l.name
+            if layer_name in saved_layer_names:
+                sort_key = [w.name.split('/')[-1] for w in l.weights]
+                weights = [np.array(f[f'/{layer_name}/{layer_name}/{name}']) for name in sort_key]
+                l.set_weights(weights)
 
+        return self
 
-    # def load_weights(self, filepath):
-    #     """Modified version of the corresponding Keras function with
-    #     the addition of multi-GPU support and the ability to exclude
-    #     some layers from loading.
-    #     exclude: list of layer names to exclude
-    #     """
-    #     import h5py
+def collect_models(model):
+    models = []
+    if isinstance(model, KM.Model):
+        models.append(model)
+        for layer in model.layers:
+            models.extend(collect_models(layer))
+    return models
 
-    #     f = h5py.File(filepath, mode='r')
-    #     if 'layer_names' not in f.attrs and 'model_weights' in f:
-    #         f = f['model_weights']
-
-    #     # In multi-GPU training, we wrap the model. Get layers
-    #     # of the inner model because they have the weights.
-    #     layers = self.layers if hasattr(self, "inner_model")\
-    #         else self.layers
-
-    #     f.close()
-    #     return self
+def collect_weighted_layers(model):
+    layers = []
+    if isinstance(model, KM.Model):
+        for layer in model.layers:
+            layers.extend(collect_weighted_layers(layer))
+    elif model.weights:
+        layers.append(model)
+    return layers

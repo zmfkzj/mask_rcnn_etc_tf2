@@ -4,8 +4,8 @@ import tensorflow.keras.models as KM
 
 
 class RPN(KM.Model):
-    def __init__(self, anchor_stride, anchors_per_location):
-        super().__init__()
+    def __init__(self, anchor_stride, anchors_per_location, *args, **kwdargs):
+        super().__init__(*args, **kwdargs)
 
         # TODO: check if stride of 2 causes alignment issues if the feature map
         # is not even.
