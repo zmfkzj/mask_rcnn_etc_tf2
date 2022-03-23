@@ -4,6 +4,8 @@ import tensorflow.keras as keras
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
 
+from tensorflow.python.keras.saving.hdf5_format import load_weights_from_hdf5_group_by_name
+
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
@@ -28,6 +30,12 @@ class MaskRCNN(KM.Model):
         """
         super().__init__(name='mask_rcnn')
         self.config = config
+
+        if isinstance(config.GPUS, int):
+            gpus = [config.GPUS]
+        else:
+            gpus = config.GPUS
+        self.strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus], cross_device_ops=config.CROSS_DEVICE_OPS)
 
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
@@ -281,15 +289,15 @@ class MaskRCNN(KM.Model):
         return self._anchor_cache[key]
     
     def load_weights(self, filepath):
-        """Modified version of the corresponding Keras function with
-        the addition of multi-GPU support and the ability to exclude
-        some layers from loading.
-        exclude: list of layer names to exclude
-        """
         from pathlib import Path
         if Path(filepath).suffix == '.h5':
             import h5py
             import numpy as np
+
+            with self.strategy.scope():
+                inputs = (tf.zeros([1,512,512,3]), tf.zeros([1,20]))
+                self.strategy.run(self, args=(*inputs,), kwargs={'training':False})
+
             f = h5py.File(filepath, mode='r')
             saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
             weighted_layers = collect_layers(self)
@@ -303,8 +311,11 @@ class MaskRCNN(KM.Model):
             ckpt = tf.train.Checkpoint(model=self)
             manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
             status = ckpt.restore(filepath)
-
         return self
+    
+    @property
+    def is_restore(self):
+        return self._restore
 
 def collect_layers(model):
     layers = []

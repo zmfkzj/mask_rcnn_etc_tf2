@@ -16,7 +16,7 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.0001
+    LEARNING_RATE = 0.001
     IMAGES_PER_GPU = 3
     STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 100
@@ -40,7 +40,8 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
 train_dataset = CocoDataset()
 train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_train2017.json')
 
-model = MaskRCNN(train_config).load_weights('mask_rcnn_coco.h5')
+model = MaskRCNN(train_config)
+model.load_weights('mask_rcnn_coco.h5')
 
 lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 80000,0.1,1000, staircase=True)
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 class Detector:
     def __init__(self, model, classes:list, config:Config=Config(), ) -> None:
-        self.mirrored_strategy = config.MIRRORED_STRATEGY
+        self.mirrored_strategy = model.strategy
         self.config = config
         self.classes = classes
 
