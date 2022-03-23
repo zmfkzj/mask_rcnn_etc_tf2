@@ -15,11 +15,9 @@ class Trainer:
                         optimizer = keras.optimizers.SGD(),
                         config:Config = Config(),
                         augmentation = None,
-                        logs_dir='logs/',
-                        weights_path=None):
+                        logs_dir='logs/'):
         self.config = config
         self.val_evaluator = val_evaluator
-        self.weights_path = weights_path
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
@@ -54,10 +52,14 @@ class Trainer:
             layers = layer_regex[layers]
 
 
-        ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
+        ckpt = tf.train.Checkpoint(model=self.model)
         ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
 
-        self.model.load_weights(self.weights_path)
+        with self.mirrored_strategy.scope():
+            for inputs in self.dataset:
+                self.mirrored_strategy.run(self.model, args=(inputs[0],inputs[1]),kwargs={'training':False})
+                break
+
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):
