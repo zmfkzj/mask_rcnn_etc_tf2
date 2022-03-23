@@ -33,7 +33,7 @@ class Evaluator(Detector):
 
         results_for_all = {}
         source_class_ids = {self.dataset.get_source_class_id(class_id, 'coco'):cat_name for class_id, cat_name in enumerate(self.classes) if cat_name!='BG'}
-        true, pred, sample_weight,mAP50 = self.get_state(source_class_ids, detections, iouType=iouType or self.iouType)
+        true, pred, sample_weight,mAP50 = self.get_state(list(source_class_ids.keys()), detections, iouType=iouType or self.iouType)
         metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
                     'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
         for metric_name, metric_fn in metrics.items():
@@ -43,12 +43,13 @@ class Evaluator(Detector):
         results_for_all['mAP'] = np.nan if mAP50==-1 else mAP50
         results_for_all['F1-Score'] = 2*results_for_all['recall']*results_for_all['precision']/(results_for_all['recall']+results_for_all['precision'])
 
+        metrics_head = [f'mAP50',f'Recall{int(self.conf_thresh*100)}',f'Precision{int(self.conf_thresh*100)}',f'F1-Score{int(self.conf_thresh*100)}']
         if per_class:
             results_per_class = defaultdict(OrderedDict)
-            for class_id, cat_name in source_class_ids:
+            for class_id, cat_name in source_class_ids.items():
                 if cat_name=='BG':
                     continue
-                true, pred, sample_weight,mAP50 = self.get_state(self.dataset.get_source_class_id(class_id, 'coco'), detections, iouType=iouType)
+                true, pred, sample_weight,mAP50 = self.get_state(class_id, detections, iouType=iouType or self.iouType)
                 metrics = { 'recall':keras.metrics.Recall(thresholds=self.conf_thresh), 
                             'precision':keras.metrics.Precision(thresholds=self.conf_thresh)}
                 for metric_name, metric_fn in metrics.items():
@@ -60,7 +61,6 @@ class Evaluator(Detector):
             results_per_class['F1-Score'] = self.cal_F1(results_per_class)
             df_per_class = pd.DataFrame(results_per_class).rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
     
-        metrics_head = [f'mAP50',f'Recall{int(self.conf_thresh*100)}',f'Precision{int(self.conf_thresh*100)}',f'F1-Score{int(self.conf_thresh*100)}']
         df_for_all = pd.DataFrame({'total':results_for_all}).T.rename(columns=dict(zip(['mAP','recall','precision','F1-Score'],metrics_head)))
 
         if save_dir is not None:
@@ -86,7 +86,7 @@ class Evaluator(Detector):
         # Evaluate
         cocoEval = COCOeval(self.coco, coco_results,iouType=iouType)
         cocoEval.params.imgIds = coco_image_ids
-        cocoEval.params.catIds = list(class_id.keys())
+        cocoEval.params.catIds = class_id
         cocoEval.evaluate()
         cocoEval.accumulate()
         cocoEval.summarize()
@@ -128,21 +128,17 @@ class Evaluator(Detector):
 
         results = []
         for det in detections:
-            image_path, rois, _, class_ids, scores, masks = det.values()
+            image_path, roi, _, class_id, score, mask = det.values()
             image_id = self.image_filename_id[image_path]
             # Loop through detections
-            for i in range(rois.shape[0]):
-                class_id = class_ids[i]
-                score = scores[i]
-                bbox = np.around(rois[i], 1)
-                mask = masks[:, :, i]
+            bbox = np.around(roi, 1)
 
-                result = {
-                    "image_id": image_id,
-                    "category_id": self.dataset.get_source_class_id(class_id, "coco"),
-                    "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
-                    "score": score,
-                    "segmentation": maskUtils.encode(np.asfortranarray(mask))
-                }
-                results.append(result)
+            result = {
+                "image_id": image_id,
+                "category_id": self.dataset.get_source_class_id(class_id, "coco"),
+                "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
+                "score": score,
+                "segmentation": maskUtils.encode(np.asfortranarray(mask))
+            }
+            results.append(result)
         return results

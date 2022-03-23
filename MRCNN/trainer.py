@@ -16,12 +16,10 @@ class Trainer:
                         config:Config = Config(),
                         augmentation = None,
                         logs_dir='logs/',
-                        pretrained_weights=None,
-                        check_point=None):
+                        weights_path=None):
         self.config = config
         self.val_evaluator = val_evaluator
-        self.pretrained_weights = pretrained_weights
-        self.check_point = check_point
+        self.weights_path = weights_path
 
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
@@ -58,17 +56,8 @@ class Trainer:
 
         ckpt = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model)
         ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
-        check_point = self.check_point or ckpt_mng.latest_checkpoint
-        status = ckpt.restore(check_point)
 
-        with self.mirrored_strategy.scope():
-            for inputs in self.dataset:
-                self.mirrored_strategy.run(self.model, args=(inputs[0],inputs[1]),kwargs={'training':False})
-                break
-
-        if check_point is None and self.pretrained_weights is not None:
-            self.model.load_weights(self.pretrained_weights,by_name=True)
-            print('pretrained weights loading complete.')
+        self.model.load_weights(self.weights_path)
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):

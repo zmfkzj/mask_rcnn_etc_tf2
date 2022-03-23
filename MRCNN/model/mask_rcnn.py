@@ -280,31 +280,37 @@ class MaskRCNN(KM.Model):
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
     
-    def load_weights(self, filepath, by_name=True):
+    def load_weights(self, filepath):
         """Modified version of the corresponding Keras function with
         the addition of multi-GPU support and the ability to exclude
         some layers from loading.
         exclude: list of layer names to exclude
         """
-        import h5py
-        import numpy as np
-        f = h5py.File(filepath, mode='r')
-        saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
-        weighted_layers = collect_weighted_layers(self)
-        for l in weighted_layers:
-            layer_name = l.name
-            if layer_name in saved_layer_names:
-                sort_key = [w.name.split('/')[-1] for w in l.weights]
-                weights = [np.array(f[f'/{layer_name}/{layer_name}/{name}']) for name in sort_key]
-                l.set_weights(weights)
+        from pathlib import Path
+        if Path(filepath).suffix == '.h5':
+            import h5py
+            import numpy as np
+            f = h5py.File(filepath, mode='r')
+            saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
+            weighted_layers = collect_layers(self)
+            for l in weighted_layers:
+                layer_name = l.name
+                if layer_name in saved_layer_names:
+                    sort_key = [w.name.split('/')[-1] for w in l.weights]
+                    weights = [np.array(f[f'/{layer_name}/{layer_name}/{name}']) for name in sort_key]
+                    l.set_weights(weights)
+        else:
+            ckpt = tf.train.Checkpoint(model=self)
+            manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
+            status = ckpt.restore(filepath)
 
         return self
 
-def collect_weighted_layers(model):
+def collect_layers(model):
     layers = []
     if isinstance(model, KM.Model):
         for layer in model.layers:
-            layers.extend(collect_weighted_layers(layer))
-    elif model.weights:
+            layers.extend(collect_layers(layer))
+    else:
         layers.append(model)
     return layers

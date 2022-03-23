@@ -37,11 +37,10 @@ class Detector:
             take_count = limit_step*self.config.IMAGES_PER_GPU*self.config.GPU_COUNT
 
         all_pathes = []
-        all_shapes = []
-        all_detections = []
+        all_rois = []
+        all_class_ids = []
+        all_scores = []
         all_masks = []
-        all_molded_shapes = []
-        all_windows = []
 
         if shuffle:
             path_dataset = tf.data.Dataset.from_tensor_slices(image_pathes).shuffle(pathes_size).take(take_count).as_numpy_iterator()
@@ -61,18 +60,22 @@ class Detector:
             mold_things = self.mirrored_strategy.experimental_distribute_dataset(mold_things)
             for dist_input in mold_things:
                 pathes, image_shapes, detections, mrcnn_mask, molded_images, windows =self.detect_step(dist_input) 
-
-                all_pathes.append(pathes.numpy())
-                all_shapes.append(image_shapes.numpy())
-                all_detections.append(detections.numpy())
-                all_masks.append(mrcnn_mask.numpy())
-                all_molded_shapes.append(np.array([img.shape for img in molded_images.numpy()]))
-                all_windows.append(windows.numpy())
+                molded_shape = np.array([img.shape for img in molded_images.numpy()])
+                for i in range(detections.numpy().shape[0]):
+                    final_rois, final_class_ids, final_scores, final_masks =\
+                        self.unmold_detections(detections[i].numpy(), mrcnn_mask[i].numpy(),image_shapes[i].numpy(), 
+                                            molded_shape[i], windows[i].numpy())
+                    
+                    all_pathes.append(pathes[i].numpy())
+                    all_rois.append(final_rois)
+                    all_class_ids.append(final_class_ids)
+                    all_scores.append(final_scores)
+                    all_masks.append(final_masks)
 
                 pbar.update()
         pbar.close()
         
-        results = self.post_proceccing(all_pathes, all_shapes, all_detections, all_masks, all_molded_shapes ,all_windows)
+        results = self.post_proceccing(all_pathes, all_rois, all_class_ids, all_scores, all_masks)
         for r in results:
             r['path'] = str(Path(r['path'].decode('utf-8')).relative_to(image_dir))
         return results
@@ -203,31 +206,17 @@ class Detector:
             
             yield path, image.shape, molded_image, image_meta, window
 
-    def post_proceccing(self,pathes, image_shapes, detections, mrcnn_mask, molded_shapes ,windows):
-        pathes = np.concatenate(pathes, 0)
-        image_shapes = np.concatenate(image_shapes, 0)
-        detections = np.concatenate(detections, 0)
-        mrcnn_mask = np.concatenate(mrcnn_mask,0)
-        molded_shapes = np.concatenate(molded_shapes,0)
-        windows = np.concatenate(windows,0)
+    def post_proceccing(self,all_pathes, all_rois, all_class_ids, all_scores, all_masks):
 
         results = []
-        for i in range(len(pathes)):
-            path = pathes[i]
-            shape = image_shapes[i]
-            final_rois, final_class_ids, final_scores, final_masks =\
-                self.unmold_detections(detections[i], mrcnn_mask[i],
-                                    shape, molded_shapes[i],
-                                    windows[i])
-            if final_rois.shape[0]==0:
-                continue
-            else:
+        for i in range(len(all_pathes)):
+            for j in range(all_rois[i].shape[0]):
                 results.append({
-                    "path": path,
-                    "rois": final_rois, # x1,y1,x2,y2
-                    "classes": [self.classes[id] for id in final_class_ids],
-                    "class_ids": final_class_ids,
-                    "scores": final_scores,
-                    "masks": final_masks,
+                    "path": all_pathes[i],
+                    "rois": all_rois[i][j], # x1,y1,x2,y2
+                    "classes": self.classes[all_class_ids[i][j]],
+                    "class_ids": all_class_ids[i][j],
+                    "scores": all_scores[i][j],
+                    "masks": all_masks[i][j],
                 })
         return results
