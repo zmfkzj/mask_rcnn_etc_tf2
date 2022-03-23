@@ -26,12 +26,12 @@ except Exception:
     install_reqs = []
 
 setup(
-    name='mask-rcnn',
+    name='meta-rcnn',
     version='0.1',
-    url='https://github.com/zmfkzj/Mask_RCNN_TF2',
+    url='https://github.com/zmfkzj/meta-rcnn-tf2.7',
     author='zmfkzj',
     author_email='qlwlal@naver.com',
-    description='Mask R-CNN for object detection and instance segmentation for TF2.7',
+    description='Meta R-CNN for object detection for TF2.7',
     packages=["MRCNN"],
     install_requires=install_reqs,
     include_package_data=True,
