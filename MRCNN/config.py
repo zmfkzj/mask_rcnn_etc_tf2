@@ -209,10 +209,8 @@ class Config(object):
         # Effective batch size
         if isinstance(self.GPUS, int):
             self.GPU_COUNT = 1
-            self.MIRRORED_STRATEGY = tf.distribute.MirroredStrategy(devices=[f'/gpu:{self.GPUS}'], cross_device_ops=self.CROSS_DEVICE_OPS)
         else:
             self.GPU_COUNT = len(self.GPUS)
-            self.MIRRORED_STRATEGY = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in self.GPUS], cross_device_ops=self.CROSS_DEVICE_OPS)
         self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size

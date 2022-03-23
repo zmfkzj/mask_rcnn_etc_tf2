@@ -22,7 +22,7 @@ class Trainer:
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
         
-        self.mirrored_strategy = config.MIRRORED_STRATEGY
+        self.mirrored_strategy = model.strategy
         self.model = model
 
         with self.mirrored_strategy.scope():
@@ -55,10 +55,6 @@ class Trainer:
         ckpt = tf.train.Checkpoint(model=self.model)
         ckpt_mng = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
 
-        with self.mirrored_strategy.scope():
-            for inputs in self.dataset:
-                self.mirrored_strategy.run(self.model, args=(inputs[0],inputs[1]),kwargs={'training':False})
-                break
 
         self.model.set_trainable(layers)
 
