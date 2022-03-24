@@ -22,7 +22,7 @@ class Trainer:
         self.summary_writer = tf.summary.create_file_writer(logs_dir)
         dataset.prepare()
         
-        self.mirrored_strategy = model.strategy
+        self.mirrored_strategy = config.STRATEGY
         self.model = model
 
         with self.mirrored_strategy.scope():

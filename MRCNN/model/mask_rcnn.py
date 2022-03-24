@@ -31,12 +31,6 @@ class MaskRCNN(KM.Model):
         super().__init__(name='mask_rcnn')
         self.config = config
 
-        if isinstance(config.GPUS, int):
-            gpus = [config.GPUS]
-        else:
-            gpus = config.GPUS
-        self.strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus], cross_device_ops=config.CROSS_DEVICE_OPS)
-
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
@@ -294,9 +288,9 @@ class MaskRCNN(KM.Model):
             import h5py
             import numpy as np
 
-            with self.strategy.scope():
+            with self.config.STRATEGY.scope():
                 inputs = (tf.zeros([1,512,512,3]), tf.zeros([1,20]))
-                self.strategy.run(self, args=(*inputs,), kwargs={'training':False})
+                self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False})
 
             f = h5py.File(filepath, mode='r')
             saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
