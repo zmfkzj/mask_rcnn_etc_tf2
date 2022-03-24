@@ -294,9 +294,9 @@ class MaskRCNN(KM.Model):
             import h5py
             import numpy as np
 
-            with self.strategy.scope():
+            with self.config.STRATEGY.scope():
                 inputs = (tf.zeros([1,512,512,3]), tf.zeros([1,20]))
-                self.strategy.run(self, args=(*inputs,), kwargs={'training':False})
+                self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False})
 
             f = h5py.File(filepath, mode='r')
             saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
