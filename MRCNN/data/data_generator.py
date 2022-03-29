@@ -2,8 +2,11 @@ import logging
 import numpy as np
 import imgaug.augmenters as iaa
 
+
 from MRCNN import utils
 from ..model_utils.data_formatting import compose_image_meta, mold_image
+
+from collections import defaultdict
 
 
 def load_image_gt(dataset, config, image_id, augmentation:iaa.Sequential=None,
@@ -444,7 +447,7 @@ def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
 
 def data_generator(dataset, config, shuffle=True, augmentation=None,
                    random_rois=0, batch_size=1, detection_targets=False,
-                   no_augmentation_sources=None):
+                   no_augmentation_sources=None, shots=None):
     """A generator that returns images and corresponding target class ids,
     bounding box deltas, and masks.
 
@@ -501,6 +504,9 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
                                              config.RPN_ANCHOR_STRIDE)
 
     # Keras requires a generator to run indefinitely.
+    prn_image = defaultdict(list)
+    prn_mask = defaultdict(list)
+    classes = defaultdict(int)
     while True:
         try:
             # Increment index to pick next image. Shuffle if at the start of an epoch.

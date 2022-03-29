@@ -24,6 +24,8 @@ class Trainer:
         
         self.mirrored_strategy = config.STRATEGY
         self.model = model
+        # for i in data_generator(dataset, config, augmentation=augmentation, batch_size=1):
+        #     print(i)
 
         with self.mirrored_strategy.scope():
             self.optimizer = optimizer
@@ -92,7 +94,7 @@ class Trainer:
                     tf.summary.scalar('val_F1-Score', val_metric['F1-Score'], step=self.optimizer.iterations)
 
 
-    @tf.function
+    # @tf.function
     def train_step(self, dist_inputs):
         def step_fn(inputs):
             images, input_image_meta, \

@@ -13,13 +13,18 @@ from MRCNN.config import Config
 
 
 class TrainConfig(Config):
-    GPUS = 0,1
-    # GPUS = 0
+    # GPUS = 0,1
+    GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.001
-    IMAGES_PER_GPU = 3
+    IMAGES_PER_GPU = 1
     STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 100
+    MAX_GT_INSTANCES = 20
+    IMAGE_MIN_DIM = 400
+    IMAGE_MAX_DIM = 512
+    BACKBONE = "resnet101"
+    POST_NMS_ROIS_TRAINING = 1000
     
 
 train_config = TrainConfig()
@@ -41,7 +46,7 @@ train_dataset = CocoDataset()
 train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_train2017.json')
 
 model = MaskRCNN(train_config)
-model.load_weights('mask_rcnn_coco.h5')
+# model.load_weights('mask_rcnn_coco.h5')
 
 lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 80000,0.1,1000, staircase=True)
 
@@ -67,10 +72,10 @@ trainer.train(90, '4+')
 trainer.train(160, 'all')
 
 class ValConfig(Config):
-    GPUS = 0,1
-    # GPUS = 0
+    # GPUS = 0,1
+    GPUS = 0
     NUM_CLASSES = 1+80 
-    IMAGES_PER_GPU = 20
+    IMAGES_PER_GPU = 5
 
 model = MaskRCNN(ValConfig())
 model.load_weights('save_model/ckpt-65')

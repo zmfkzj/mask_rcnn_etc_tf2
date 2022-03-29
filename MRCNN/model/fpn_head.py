@@ -9,10 +9,6 @@ class FPN_classifier(KM.Model):
         self.pool_size = pool_size
         self.num_classes = num_classes
 
-        # ROI Pooling
-        # Shape: [batch, num_rois, POOL_SIZE, POOL_SIZE, channels]
-        self.ROIAlign = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_classifier")
-
         # Two 1024 FC layers (implemented with Conv2D for consistency)
         self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(fc_layers_size, (pool_size, pool_size), padding="valid"), name="mrcnn_class_conv1")
         self.timedist_bn_1 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn1')
@@ -30,7 +26,7 @@ class FPN_classifier(KM.Model):
         self.shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")
         self.mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(tf.shape(t)[0], tf.shape(t)[1], self.num_classes, 4)),name="mrcnn_bbox")
 
-    def call(self, rois, feature_maps, image_meta, train_bn=True):
+    def call(self, pooled_rois, training=True):
         """Builds the computation graph of the feature pyramid network classifier
         and regressor heads.
 
@@ -50,16 +46,12 @@ class FPN_classifier(KM.Model):
             bbox_deltas: [batch, num_rois, NUM_CLASSES, (dy, dx, log(dh), log(dw))] Deltas to apply to
                         proposal boxes
         """
-        # ROI Pooling
-        # Shape: [batch, num_rois, POOL_SIZE, POOL_SIZE, channels]
-        x = self.ROIAlign([rois, image_meta] + feature_maps)
-
         # Two 1024 FC layers (implemented with Conv2D for consistency)
-        x = self.timedist_conv_1(x)
-        x = self.timedist_bn_1(x, training=train_bn)
+        x = self.timedist_conv_1(pooled_rois)
+        x = self.timedist_bn_1(x, training=training)
         x = KL.Activation('relu')(x)
         x = self.timedist_conv_2(x)
-        x = self.timedist_bn_2(x, training=train_bn)
+        x = self.timedist_bn_2(x, training=training)
         x = KL.Activation('relu')(x)
 
         shared = self.shared(x)
@@ -78,14 +70,9 @@ class FPN_classifier(KM.Model):
 
 
 class FPN_mask(KM.Model):
-    def __init__(self, pool_size, num_classes):
+    def __init__(self, num_classes):
         super().__init__()
-        self.pool_size = pool_size
         self.num_classes = num_classes
-
-        # ROI Pooling
-        # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
-        self.ROIAlign = PyramidROIAlign([self.pool_size, self.pool_size], name="roi_align_mask")
 
         # Conv layers
         self.timedist_conv_1 = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"), name="mrcnn_mask_conv1")
@@ -103,7 +90,7 @@ class FPN_mask(KM.Model):
         self.timedist_convT = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"), name="mrcnn_mask_deconv")
         self.timedist_conv_5 = KL.TimeDistributed(KL.Conv2D(self.num_classes, (1, 1), strides=1, activation="sigmoid"), name="mrcnn_mask")
 
-    def call(self, rois, feature_maps, image_meta, train_bn=True):
+    def call(self, pooled_rois, training=True):
         """Builds the computation graph of the mask head of Feature Pyramid Network.
 
         rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
@@ -117,25 +104,21 @@ class FPN_mask(KM.Model):
 
         Returns: Masks [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, NUM_CLASSES]
         """
-        # ROI Pooling
-        # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
-        x = self.ROIAlign([rois, image_meta] + feature_maps)
-
         # Conv layers
-        x = self.timedist_conv_1(x)
-        x = self.timedist_bn_1(x, training=train_bn)
+        x = self.timedist_conv_1(pooled_rois)
+        x = self.timedist_bn_1(x, training=training)
         x = KL.Activation('relu')(x)
 
         x = self.timedist_conv_2(x)
-        x = self.timedist_bn_2(x, training=train_bn)
+        x = self.timedist_bn_2(x, training=training)
         x = KL.Activation('relu')(x)
 
         x = self.timedist_conv_3(x)
-        x = self.timedist_bn_3(x, training=train_bn)
+        x = self.timedist_bn_3(x, training=training)
         x = KL.Activation('relu')(x)
 
         x = self.timedist_conv_4(x)
-        x = self.timedist_bn_4(x, training=train_bn)
+        x = self.timedist_bn_4(x, training=training)
         x = KL.Activation('relu')(x)
 
         x = self.timedist_convT(x)
