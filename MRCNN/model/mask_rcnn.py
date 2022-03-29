@@ -9,7 +9,7 @@ from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.layer.roialign import parse_image_meta_graph
-from . import Resnet, FPN_classifier, FPN_mask, RPN
+from . import Resnet, FPN_classifier, FPN_mask, RPN,FPN_mask_notime, FPN_classifier_notime
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..utils import log, compute_backbone_shapes
@@ -179,12 +179,14 @@ class MaskRCNN(KM.Model):
 
 
         if attentions is None and training:
-            attentions = tf.map_fn(lambda mask: make_prn_features(mask),
-                                    tf.transpose(input_gt_masks, [3,0,1,2]),
-                                    fn_output_signature=tf.TensorSpec(shape=(batch_size,self.config.TOP_DOWN_PYRAMID_SIZE,), 
-                                                                    dtype=tf.float32)
-                                    )
-            attentions = tf.reshape(attentions, [tf.shape(attentions)[0], batch_size,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
+            idx = tf.random.shuffle(tf.range(self.config.MAX_GT_INSTANCES))[0]
+            # attentions = tf.map_fn(lambda mask: make_prn_features(mask),
+            #                         tf.transpose(input_gt_masks, [3,0,1,2]),
+            #                         fn_output_signature=tf.TensorSpec(shape=(batch_size,self.config.TOP_DOWN_PYRAMID_SIZE,), 
+            #                                                         dtype=tf.float32)
+            #                         )
+            attentions = make_prn_features(tf.transpose(input_gt_masks, [3,0,1,2])[idx])
+            attentions = tf.reshape(attentions, [1, batch_size,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
 
         # # Anchors
         anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
@@ -233,7 +235,6 @@ class MaskRCNN(KM.Model):
             def forward_fpn(attention):
                 attentive_cls_feature = roi_cls_feature * attention
                 attentive_seg_feature = roi_seg_feature * attention
-                tf.print(tf.shape(attentive_seg_feature))
                 mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=self.config.TRAIN_BN)
                 mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
 
@@ -251,7 +252,7 @@ class MaskRCNN(KM.Model):
                                                     for w in self.trainable_weights
                                                     if 'gamma' not in w.name and 'beta' not in w.name])
                 return [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses]
-            
+
             rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses = \
                 tf.map_fn(forward_fpn, attentions, fn_output_signature=[tf.TensorSpec(shape=(), dtype=tf.float32),
                                                                         tf.TensorSpec(shape=(), dtype=tf.float32),
@@ -260,7 +261,7 @@ class MaskRCNN(KM.Model):
                                                                         tf.TensorSpec(shape=(), dtype=tf.float32),
                                                                         tf.TensorSpec(shape=(), dtype=tf.float32),
                                                                         ]
-                        ,swap_memory=True)
+                        )
 
             reg_losses = tf.reduce_mean(reg_losses)
             rpn_class_loss = tf.reduce_mean(rpn_class_loss)
