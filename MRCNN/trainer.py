@@ -66,7 +66,7 @@ class Trainer:
                 for i, inputs in enumerate(self.dataset):
                     if self.config.STEPS_PER_EPOCH > i:
                         losses = self.train_step(inputs)
-                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses= losses
+                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss= losses
                         mean_loss = np.mean([loss.numpy() for loss in losses])
 
                         with self.summary_writer.as_default():
@@ -76,6 +76,7 @@ class Trainer:
                             tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
+                            tf.summary.scalar('meta_loss', meta_loss, step=self.optimizer.iterations)
                     else:
                         break
 
@@ -94,7 +95,7 @@ class Trainer:
                     tf.summary.scalar('val_F1-Score', val_metric['F1-Score'], step=self.optimizer.iterations)
 
 
-    @tf.function
+    # @tf.function
     def train_step(self, dist_inputs):
         def step_fn(inputs):
             images, input_image_meta, \

@@ -29,7 +29,8 @@ class TrainConfig(Config):
         "rpn_bbox_loss": .001,
         "mrcnn_class_loss": .001,
         "mrcnn_bbox_loss": .001,
-        "mrcnn_mask_loss": .001
+        "mrcnn_mask_loss": .001,
+        'meta_loss':.001
     }
     
 
