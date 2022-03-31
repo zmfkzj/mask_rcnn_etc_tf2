@@ -1,7 +1,9 @@
+import os
 import tensorflow as tf
 import tensorflow.keras as keras
-
 import numpy as np
+import pickle as pk
+
 from tqdm import tqdm
 
 from .evaluator import Evaluator
@@ -61,13 +63,19 @@ class Trainer:
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):
+            cls_attentions = np.empty([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, self.config.TOP_DOWN_PYRAMID_SIZE])
+            cls_attentions[...] = np.nan
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
                 for i, inputs in enumerate(self.dataset):
                     if self.config.STEPS_PER_EPOCH > i:
-                        losses = self.train_step(inputs)
-                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses= losses
+                        losses, attentions = self.train_step(inputs)
+
+                        rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss= losses
+                        attentions, prn_cls = attentions
+
                         mean_loss = np.mean([loss.numpy() for loss in losses])
+                        cls_attentions[i,prn_cls,...] = attentions
 
                         with self.summary_writer.as_default():
                             tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
@@ -76,17 +84,24 @@ class Trainer:
                             tf.summary.scalar('mrcnn_bbox_loss', bbox_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('mrcnn_mask_loss', mask_loss, step=self.optimizer.iterations)
                             tf.summary.scalar('reg_losses', reg_losses, step=self.optimizer.iterations)
+                            tf.summary.scalar('meta_loss', meta_loss, step=self.optimizer.iterations)
                     else:
                         break
 
                     pbar.update()
                     pbar.set_postfix({'mean_loss':mean_loss,
                                        'lr': self.optimizer._decayed_lr('float32').numpy()})
+
+            attentions = np.nanmean(cls_attentions,0)
+            if not os.path.isdir('save_attentions'):
+                os.mkdir('save_attentions')
+            with open(f'save_attentions/{epoch}.pickle', 'wb') as f:
+                pk.dump(attentions, f)
             pbar.close()
             ckpt_mng.save()
 
             if self.val_evaluator is not None:
-                val_metric = self.val_evaluator.eval(limit_step=self.config.VALIDATION_STEPS, iouType='bbox', per_class=False)
+                val_metric = self.val_evaluator.eval(attentions, limit_step=self.config.VALIDATION_STEPS, iouType='bbox', per_class=False)
                 with self.summary_writer.as_default():
                     tf.summary.scalar('val_mAP', val_metric['mAP'], step=self.optimizer.iterations)
                     tf.summary.scalar('val_recall', val_metric['recall'], step=self.optimizer.iterations)
@@ -100,6 +115,7 @@ class Trainer:
             images, input_image_meta, \
             input_rpn_match, input_rpn_bbox, \
             input_gt_class_ids, input_gt_boxes, input_gt_masks = inputs
+
             with tf.GradientTape() as tape:
                 outputs = self.model(images, input_image_meta,
                                     input_rpn_match=input_rpn_match, 

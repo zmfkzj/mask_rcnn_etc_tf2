@@ -2,6 +2,7 @@ from pathlib import Path
 import tensorflow.keras as keras
 import numpy as np
 import pandas as pd
+import pickle as pk
 
 from MRCNN.detector import Detector
 from MRCNN.config import Config
@@ -26,10 +27,12 @@ class Evaluator(Detector):
         self.classes = [info['name'] for info in self.dataset.class_info]
         self.image_filename_id = {img['file_name']:img['id'] for img in self.coco.imgs.values()}
         super().__init__(model, self.classes, config)
-        # self.eval(limit_step=50, iouType='bbox', per_class=False)
+        # with open(f'save_attentions/0.pickle', 'rb') as f:
+        #     attentions = pk.load(f)
+        # self.eval(attentions, limit_step=50, iouType='bbox', per_class=False)
 
-    def eval(self, save_dir=None, limit_step=-1, iouType=None, per_class=True)->dict:
-        detections =  self.detect(self.gt_image_dir, shuffle=True, limit_step=limit_step)
+    def eval(self, attentions, save_dir=None, limit_step=-1, iouType=None, per_class=True)->dict:
+        detections =  self.detect(attentions, self.gt_image_dir, shuffle=True, limit_step=limit_step)
 
         results_for_all = {}
         source_class_ids = {self.dataset.get_source_class_id(class_id, 'coco'):cat_name for class_id, cat_name in enumerate(self.classes) if cat_name!='BG'}

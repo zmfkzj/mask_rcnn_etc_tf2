@@ -1,15 +1,17 @@
 import re
 import sys
+import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
+import cv2
 
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.layer.roialign import parse_image_meta_graph
-from . import Resnet, FPN_classifier, FPN_mask, RPN,FPN_mask_notime, FPN_classifier_notime
+from . import FPN_classifier, FPN_mask, Backbone2FPN, RPN
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..utils import log, compute_backbone_shapes
@@ -42,11 +44,11 @@ class MaskRCNN(KM.Model):
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
-        self.backbone = Resnet(config.BACKBONE)
 
         self.meta_conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='meta_conv1', use_bias=True)
         self.conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='conv1', use_bias=True)
-        
+
+        self.backbone2fpn = Backbone2FPN(config)
         self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         self.ROIAlign_classifier = PyramidROIAlign([config.POOL_SIZE, config.POOL_SIZE], name="roi_align_classifier")
@@ -55,27 +57,16 @@ class MaskRCNN(KM.Model):
         self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_mask = FPN_mask(self.config.NUM_CLASSES)
 
-        # Top-down Layers
-        # TODO: add assert to varify feature map sizes match what's in config
-        self.fpn_c5p5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c5p5')
-        self.fpn_c4p4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c4p4')
-        self.fpn_c3p3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c3p3')
-        self.fpn_c2p2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1), name='fpn_c2p2')
-        # Attach 3x3 conv to all P layers to get the final feature maps.
-        self.fpn_p2 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")
-        self.fpn_p3 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p3")
-        self.fpn_p4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p4")
-        self.fpn_p5 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p5")
-
         self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
 
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
+
+        self.attentions_layer = KL.Dense(config.TOP_DOWN_PYRAMID_SIZE, kernel_initializer=tf.initializers.HeUniform(), activation='sigmoid')
+        self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
 
         with self.config.STRATEGY.scope():
-            inputs = (tf.zeros([1,512,512,3]), tf.zeros([1,20]))
-            attention = tf.zeros([256])
+            inputs = (tf.zeros([2,512,512,3]), tf.zeros([2,20]))
+            attention = tf.zeros([5, config.TOP_DOWN_PYRAMID_SIZE])
             self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False, 'attentions':attention})
 
 
@@ -89,7 +80,6 @@ class MaskRCNN(KM.Model):
                     input_rois = None,
                     attentions = None,
                     training=True):
-
 
         # Build the shared convolutional layers.
         # Bottom-up Layers
@@ -121,74 +111,12 @@ class MaskRCNN(KM.Model):
         active_class_ids = KL.Lambda(lambda t: parse_image_meta_graph(t))(input_image_meta)["active_class_ids"]
         x = KL.ZeroPadding2D(padding=(3,3))(input_image)
         x = self.conv1(x)
-        _, C2, C3, C4, C5 = self.backbone(x, training=self.config.TRAIN_BN)
+        C5, P2, P3, P4, P5, P6 = self.backbone2fpn(x)
 
-        # Top-down Layers
-        # TODO: add assert to varify feature map sizes match what's in config
-        P5 = self.fpn_c5p5(C5)
-        P4 = KL.Add(name="fpn_p4add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(P5),
-                                        self.fpn_c4p4(C4)])
-        P3 = KL.Add(name="fpn_p3add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p4upsampled")(P4),
-                                        self.fpn_c3p3(C3)])
-        P2 = KL.Add(name="fpn_p2add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p3upsampled")(P3),
-                                        self.fpn_c2p2(C2)])
-        # Attach 3x3 conv to all P layers to get the final feature maps.
-        P2 = self.fpn_p2(P2)
-        P3 = self.fpn_p3(P3)
-        P4 = self.fpn_p4(P4)
-        P5 = self.fpn_p5(P5)
-        # P6 is used for the 5th anchor scale in RPN. Generated by
-        # subsampling from P5 with stride of 2.
-        P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P4)
-
-        # Note that P6 is used in RPN, but not in the classifier heads.
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
-        # make prn input image
-        def make_prn_features(gt_mask):
-            gt_mask = tf.cast(gt_mask,tf.float32)
-            gt_mask = tf.expand_dims(gt_mask,3)
-            gt_mask = tf.image.resize(gt_mask,[224,224])
-            image = tf.image.resize(input_image,[224,224])
-            input_prn = tf.concat([image, gt_mask], 3)
-            x = KL.ZeroPadding2D(padding=(3,3))(input_prn)
-            x = self.meta_conv1(x)
-            _, prn_C2, prn_C3, prn_C4, prn_C5 = self.backbone(x, training=self.config.TRAIN_BN)
-            prn_P5 = self.fpn_c5p5(prn_C5)
-            prn_P4 = KL.Add(name="fpn_p4add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(prn_P5),
-                                            self.fpn_c4p4(prn_C4)])
-            prn_P3 = KL.Add(name="fpn_p3add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p4upsampled")(prn_P4),
-                                            self.fpn_c3p3(prn_C3)])
-            prn_P2 = KL.Add(name="fpn_p2add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p3upsampled")(prn_P3),
-                                            self.fpn_c2p2(prn_C2)])
-            # Attach 3x3 conv to all P layers to get the final feature maps.
-            prn_P2 = self.fpn_p2(prn_P2)
-            prn_P3 = self.fpn_p3(prn_P3)
-            prn_P4 = self.fpn_p4(prn_P4)
-            prn_P5 = self.fpn_p5(prn_P5)
-
-            attention_P2 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P2))
-            attention_P3 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P3))
-            attention_P4 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P4))
-            attention_P5 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P5))
-
-            attention = tf.stack([attention_P2, attention_P3, attention_P4, attention_P5],0)
-            attention = tf.math.reduce_mean(attention,0)
-            return attention
-
-
-        if attentions is None and training:
-            idx = tf.random.shuffle(tf.range(self.config.MAX_GT_INSTANCES))[0]
-            # attentions = tf.map_fn(lambda mask: make_prn_features(mask),
-            #                         tf.transpose(input_gt_masks, [3,0,1,2]),
-            #                         fn_output_signature=tf.TensorSpec(shape=(batch_size,self.config.TOP_DOWN_PYRAMID_SIZE,), 
-            #                                                         dtype=tf.float32)
-            #                         )
-            attentions = make_prn_features(tf.transpose(input_gt_masks, [3,0,1,2])[idx])
-            attentions = tf.reshape(attentions, [1, batch_size,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
-
-        # # Anchors
+        # Anchors
         anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
 
         # Loop through pyramid layers
@@ -212,6 +140,61 @@ class MaskRCNN(KM.Model):
         
 
         if training:
+            def get_gt_idx(gt_cls_ids):
+                positive_cls_ids = tf.gather(gt_cls_ids, tf.where(gt_cls_ids>=0))
+                positive_cls_ids = tf.squeeze(positive_cls_ids, 1)
+                unique_cls_ids,unique_cls_idx  = tf.unique(positive_cls_ids)
+                selected_cls_id = tf.random.shuffle(unique_cls_ids)[0]
+                selected_indices = tf.where(gt_cls_ids==selected_cls_id)
+                selected_idx = tf.random.shuffle(selected_indices)[0]
+                return tf.cast(selected_idx, tf.int32)
+            idx = tf.squeeze(tf.map_fn(get_gt_idx, input_gt_class_ids), 1)
+            prn_cls = tf.squeeze(tf.gather(input_gt_class_ids, idx, axis=1), 1)
+            bboxes = tf.squeeze(tf.gather(input_gt_boxes, idx, axis=1), 1)
+            gt_masks = tf.squeeze(tf.gather(input_gt_masks, idx, axis=3), 3)
+            gt_masks = tf.cast(gt_masks,tf.float32)
+            gt_masks = tf.expand_dims(gt_masks,3)
+
+            def make_prn_maks(gt_mask, bbox):
+                y1 = bbox[0]
+                x1 = bbox[1]
+                y2 = bbox[2]
+                x2 = bbox[3]
+                h = y2-y1
+                w = x2-x1
+                prn_mask = tf.zeros([*input_image.get_shape()[1:3], 1], tf.float32)
+                def _make_prn_maks(prn_mask, gt_mask):
+                    gt_mask = tf.image.resize(gt_mask,[h,w])
+                    prn_ys, prn_xs = tf.meshgrid(tf.range(y1,y2),tf.range(x1,x2))
+                    gt_ys, gt_xs = tf.meshgrid(tf.range(h),tf.range(w))
+                    prn_indices = tf.transpose([tf.reshape(prn_ys, [-1]),tf.reshape(prn_xs, [-1])])
+                    gt_indices = tf.transpose([tf.reshape(gt_ys, [-1]),tf.reshape(gt_xs, [-1])])
+                    prn_mask = tf.tensor_scatter_nd_update(prn_mask, prn_indices, tf.gather_nd(gt_mask, gt_indices))
+                    return prn_mask
+                prn_mask = tf.cond(h==0 or w==0,lambda: prn_mask, lambda: _make_prn_maks(prn_mask, gt_mask))
+                return prn_mask
+
+            prn_masks = tf.map_fn(lambda inputs: make_prn_maks(inputs[0], inputs[1]), [gt_masks, bboxes],
+                                fn_output_signature=tf.TensorSpec(shape=(*input_image.get_shape()[1:3], 1), dtype=tf.float32))
+            prn_masks = tf.image.resize(prn_masks,[224,224])
+            image = tf.image.resize(input_image,[224,224])
+            input_prn = tf.concat([image, prn_masks], 3)
+
+            x = KL.ZeroPadding2D(padding=(3,3))(input_prn)
+            x = self.meta_conv1(x)
+            prn_C5, prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.backbone2fpn(x)
+
+            Gavg_P2 = KL.GlobalAvgPool2D()(prn_P2)
+            Gavg_P3 = KL.GlobalAvgPool2D()(prn_P3)
+            Gavg_P4 = KL.GlobalAvgPool2D()(prn_P4)
+            Gavg_P5 = KL.GlobalAvgPool2D()(prn_P5)
+            Gavg_P6 = KL.GlobalAvgPool2D()(prn_P6)
+
+            Gavg = tf.reduce_mean(tf.stack([Gavg_P2,Gavg_P3,Gavg_P4,Gavg_P5,Gavg_P6]), 0)
+            attentions = KL.Activation(tf.nn.sigmoid)(Gavg)
+            meta_score = self.meta_cls_score(attentions)
+            attentions = tf.reshape(attentions,[attentions.get_shape()[0],1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
+
             # Normalize coordinates
             gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
 
@@ -230,75 +213,78 @@ class MaskRCNN(KM.Model):
             roi_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps)
             roi_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps)
 
-            # Network Heads
-            # TODO: verify that this handles zero padded ROIs
-            def forward_fpn(attention):
-                attentive_cls_feature = roi_cls_feature * attention
-                attentive_seg_feature = roi_seg_feature * attention
-                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=self.config.TRAIN_BN)
-                mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
+            attentive_cls_feature = roi_cls_feature * attentions
+            attentive_seg_feature = roi_seg_feature * attentions
 
-                rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-                                                * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
-                rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                                * rpn_bbox_loss_graph(self.config,input_rpn_bbox, input_rpn_match, rpn_bbox), keepdims=True)
-                class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
-                                            * mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits, active_class_ids), keepdims=True)
-                bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
-                                            * mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox), keepdims=True)
-                mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
-                                            * mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask), keepdims=True)
-                reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                                                    for w in self.trainable_weights
-                                                    if 'gamma' not in w.name and 'beta' not in w.name])
-                return [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses]
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=self.config.TRAIN_BN)
+            mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
 
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses = \
-                tf.map_fn(forward_fpn, attentions, fn_output_signature=[tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(), dtype=tf.float32),
-                                                                        ]
-                        )
-
-            reg_losses = tf.reduce_mean(reg_losses)
-            rpn_class_loss = tf.reduce_mean(rpn_class_loss)
-            rpn_bbox_loss = tf.reduce_mean(rpn_bbox_loss)
-            class_loss = tf.reduce_mean(class_loss)
-            bbox_loss = tf.reduce_mean(bbox_loss)
-            mask_loss = tf.reduce_mean(mask_loss)
-
+            rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
+                                            * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
+            rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
+                                            * rpn_bbox_loss_graph(self.config,input_rpn_bbox, input_rpn_match, rpn_bbox), keepdims=True)
+            class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
+                                        * mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits, active_class_ids), keepdims=True)
+            bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
+                                        * mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox), keepdims=True)
+            mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
+                                        * mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask), keepdims=True)
+            reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                                                for w in self.trainable_weights
+                                                if 'gamma' not in w.name and 'beta' not in w.name])
+            meta_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('meta_loss', 1.)
+                                    * tf.nn.sparse_softmax_cross_entropy_with_logits(labels=prn_cls, logits=meta_score))
+            
             self.add_loss(reg_losses)
             self.add_loss(rpn_class_loss)
             self.add_loss(rpn_bbox_loss)
             self.add_loss(class_loss)
             self.add_loss(bbox_loss)
             self.add_loss(mask_loss)
+            self.add_loss(meta_loss)
 
-            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses]
+            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss],\
+                    [attentions, prn_cls]
 
         else:
 
             # Network Heads
             # Proposal classifier and BBox regressor heads
-            roi_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps)
-            attentive_cls_feature = roi_cls_feature * attentions
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=False)
+            def fpn_inference(attentions):
+                attentions = tf.reshape(attentions, [1,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
 
-            # Detections
-            # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
-            # normalized coordinates
-            detections = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+                roi_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps)
+                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
 
-            # Create masks for detections
-            detection_boxes = detections[..., :4]
-            roi_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps)
-            attentive_seg_feature = roi_seg_feature * attentions
-            mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=False)
+                # Detections
+                # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
+                # normalized coordinates
+                detections = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
-            output = [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask, rpn_rois, rpn_class, rpn_bbox]
+                # Create masks for detections
+                detection_boxes = detections[..., :4]
+                roi_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps)
+                mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
+                return detections, mrcnn_mask
+
+            detections, mrcnn_mask = \
+                tf.map_fn(fpn_inference, attentions, fn_output_signature=(tf.TensorSpec(shape=(batch_size, 
+                                                                                            self.config.DETECTION_MAX_INSTANCES,
+                                                                                            6), 
+                                                                                        dtype=tf.float32),
+                                                                        tf.TensorSpec(shape=(batch_size,
+                                                                                            self.config.DETECTION_MAX_INSTANCES,
+                                                                                            self.config.MASK_POOL_SIZE*2,
+                                                                                            self.config.MASK_POOL_SIZE*2,
+                                                                                            self.config.NUM_CLASSES), 
+                                                                                    dtype=tf.float32),
+                                                                        )
+                        )
+            detections = tf.squeeze(tf.concat(tf.split(detections, detections.get_shape()[0]),2),0)
+            mrcnn_mask = tf.squeeze(tf.concat(tf.split(mrcnn_mask, mrcnn_mask.get_shape()[0]),2),0)
+
+
+            output = [detections, mrcnn_mask]
 
         return output
 

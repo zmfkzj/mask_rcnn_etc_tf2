@@ -21,7 +21,7 @@ class Detector:
         with self.mirrored_strategy.scope():
             self.model = model
 
-    def detect(self, image_dir, shuffle=False, limit_step=-1):
+    def detect(self, attentions, image_dir, shuffle=False, limit_step=-1):
         image_pathes = []
         for r,_,fs in os.walk(image_dir):
             for f in fs:
@@ -59,7 +59,7 @@ class Detector:
         with self.mirrored_strategy.scope():
             mold_things = self.mirrored_strategy.experimental_distribute_dataset(mold_things)
             for dist_input in mold_things:
-                pathes, image_shapes, detections, mrcnn_mask, molded_images, windows =self.detect_step(dist_input) 
+                pathes, image_shapes, detections, mrcnn_mask, molded_images, windows =self.detect_step(dist_input, attentions) 
                 molded_shape = np.array([img.shape for img in molded_images.numpy()])
                 for i in range(detections.numpy().shape[0]):
                     final_rois, final_class_ids, final_scores, final_masks =\
@@ -81,7 +81,7 @@ class Detector:
         return results
     
     @tf.function
-    def detect_step(self, dist_input):
+    def detect_step(self, dist_input, attentions):
         def step_fn(pathes, image_shapes, molded_images, image_metas, windows):
             # Validate image sizes
             # All images in a batch MUST be of the same size
@@ -90,8 +90,8 @@ class Detector:
                 tf.debugging.assert_equal(tf.shape(g), image_shape,"After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes.")
 
             # Run object detection
-            detections, _, _, mrcnn_mask, _, _, _ =\
-                self.model(molded_images, image_metas,training=False)
+            detections, mrcnn_mask =\
+                self.model(molded_images, image_metas, attentions=attentions,training=False)
             
             return pathes, image_shapes, detections, mrcnn_mask, molded_images, windows
 
@@ -217,6 +217,6 @@ class Detector:
                     "classes": self.classes[all_class_ids[i][j]],
                     "class_ids": all_class_ids[i][j],
                     "scores": all_scores[i][j],
-                    "masks": all_masks[i][j],
+                    "masks": all_masks[i][...,j],
                 })
         return results
