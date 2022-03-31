@@ -109,7 +109,7 @@ class Trainer:
                     tf.summary.scalar('val_F1-Score', val_metric['F1-Score'], step=self.optimizer.iterations)
 
 
-    # @tf.function
+    @tf.function
     def train_step(self, dist_inputs):
         def step_fn(inputs):
             images, input_image_meta, \

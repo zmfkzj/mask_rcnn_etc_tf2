@@ -111,7 +111,7 @@ class MaskRCNN(KM.Model):
         active_class_ids = KL.Lambda(lambda t: parse_image_meta_graph(t))(input_image_meta)["active_class_ids"]
         x = KL.ZeroPadding2D(padding=(3,3))(input_image)
         x = self.conv1(x)
-        C5, P2, P3, P4, P5, P6 = self.backbone2fpn(x)
+        P2, P3, P4, P5, P6 = self.backbone2fpn(x)
 
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
@@ -182,7 +182,7 @@ class MaskRCNN(KM.Model):
 
             x = KL.ZeroPadding2D(padding=(3,3))(input_prn)
             x = self.meta_conv1(x)
-            prn_C5, prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.backbone2fpn(x)
+            prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.backbone2fpn(x)
 
             Gavg_P2 = KL.GlobalAvgPool2D()(prn_P2)
             Gavg_P3 = KL.GlobalAvgPool2D()(prn_P3)
