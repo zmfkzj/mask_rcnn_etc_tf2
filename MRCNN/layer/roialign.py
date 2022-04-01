@@ -42,7 +42,9 @@ class PyramidROIAlign(KL.Layer):
 
         # Feature Maps. List of feature maps from different level of the
         # feature pyramid. Each is [batch, height, width, channels]
-        feature_maps = inputs[2:]
+        feature_maps = inputs[2:6]
+
+        attentions = inputs[6:]
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
         y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
@@ -87,7 +89,7 @@ class PyramidROIAlign(KL.Layer):
             # Result: [batch * num_boxes, pool_height, pool_width, channels]
             pooled.append(tf.image.crop_and_resize(
                 feature_maps[i], level_boxes, box_indices, self.pool_shape,
-                method="bilinear"))
+                method="bilinear")*attentions[i])
 
         # Pack pooled features into one tensor
         pooled = tf.concat(pooled, axis=0)

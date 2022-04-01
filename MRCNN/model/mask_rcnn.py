@@ -1,5 +1,6 @@
 import re
 import sys
+from telnetlib import GA
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -62,11 +63,12 @@ class MaskRCNN(KM.Model):
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
 
         self.attentions_layer = KL.Dense(config.TOP_DOWN_PYRAMID_SIZE, kernel_initializer=tf.initializers.HeUniform(), activation='sigmoid')
-        self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
+        self.meta_cls_score = KL.Dense(1, kernel_initializer=tf.initializers.HeUniform())
+        self.meta_score_conv = KL.Conv1D(1,1)
 
         with self.config.STRATEGY.scope():
             inputs = (tf.zeros([2,512,512,3]), tf.zeros([2,20]))
-            attention = tf.zeros([5, config.TOP_DOWN_PYRAMID_SIZE])
+            attention = tf.zeros([5, config.TOP_DOWN_PYRAMID_SIZE*4])
             self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False, 'attentions':attention})
 
 
@@ -184,16 +186,12 @@ class MaskRCNN(KM.Model):
             x = self.meta_conv1(x)
             prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.backbone2fpn(x)
 
-            Gavg_P2 = KL.GlobalAvgPool2D()(prn_P2)
-            Gavg_P3 = KL.GlobalAvgPool2D()(prn_P3)
-            Gavg_P4 = KL.GlobalAvgPool2D()(prn_P4)
-            Gavg_P5 = KL.GlobalAvgPool2D()(prn_P5)
-            Gavg_P6 = KL.GlobalAvgPool2D()(prn_P6)
+            Gavg_P2 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P2))
+            Gavg_P3 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P3))
+            Gavg_P4 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P4))
+            Gavg_P5 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P5))
 
-            Gavg = tf.reduce_mean(tf.stack([Gavg_P2,Gavg_P3,Gavg_P4,Gavg_P5,Gavg_P6]), 0)
-            attentions = KL.Activation(tf.nn.sigmoid)(Gavg)
-            meta_score = self.meta_cls_score(attentions)
-            attentions = tf.reshape(attentions,[attentions.get_shape()[0],1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
+            attentions = [Gavg_P2, Gavg_P3, Gavg_P4, Gavg_P5]
 
             # Normalize coordinates
             gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
@@ -210,14 +208,15 @@ class MaskRCNN(KM.Model):
             # padded. Equally, returned rois and targets are zero padded.
             rois, target_class_ids, target_bbox, target_mask = DetectionTargetLayer(self.config, name="proposal_targets")([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
-            roi_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps)
-            roi_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps)
-
-            attentive_cls_feature = roi_cls_feature * attentions
-            attentive_seg_feature = roi_seg_feature * attentions
+            attentive_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps+attentions)
+            attentive_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps+attentions)
 
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=self.config.TRAIN_BN)
             mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
+            
+            meta_score = self.meta_score_conv(mrcnn_class_logits)
+            meta_score = tf.squeeze(meta_score, 2)
+            meta_true = tf.where(target_class_ids==prn_cls,1.,0.)
 
             rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
                                             * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
@@ -233,7 +232,7 @@ class MaskRCNN(KM.Model):
                                                 for w in self.trainable_weights
                                                 if 'gamma' not in w.name and 'beta' not in w.name])
             meta_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('meta_loss', 1.)
-                                    * tf.nn.sparse_softmax_cross_entropy_with_logits(labels=prn_cls, logits=meta_score))
+                                    * tf.nn.sigmoid_cross_entropy_with_logits(labels= meta_true, logits=meta_score))
             
             self.add_loss(reg_losses)
             self.add_loss(rpn_class_loss)
@@ -244,17 +243,18 @@ class MaskRCNN(KM.Model):
             self.add_loss(meta_loss)
 
             output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss],\
-                    [attentions, prn_cls]
+                    [tf.concat(attentions, -1), prn_cls]
 
         else:
 
             # Network Heads
             # Proposal classifier and BBox regressor heads
             def fpn_inference(attentions):
-                attentions = tf.reshape(attentions, [1,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
+                attentions = tf.split(attentions, 4)
+                # attentions = tf.reshape(attentions, [1,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
 
-                roi_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps)
-                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
+                attentive_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps+attentions)
+                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=False)
 
                 # Detections
                 # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
@@ -263,8 +263,8 @@ class MaskRCNN(KM.Model):
 
                 # Create masks for detections
                 detection_boxes = detections[..., :4]
-                roi_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps)
-                mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
+                attentive_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps+attentions)
+                mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=False)
                 return detections, mrcnn_mask
 
             detections, mrcnn_mask = \

@@ -15,9 +15,9 @@ class TrainConfig(Config):
     # GPUS = 0,1
     GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 10e-4
+    LEARNING_RATE = 0.00005
     IMAGES_PER_GPU = 1
-    STEPS_PER_EPOCH = 3000
+    STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 100
     MAX_GT_INSTANCES = 20
     IMAGE_MIN_DIM = 800
@@ -48,7 +48,7 @@ train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_tra
 model = MaskRCNN(train_config)
 model.load_weights('mask_rcnn_coco.h5')
 
-lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 300000,0.1,1000, staircase=True)
+lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 100000,0.1,1000, staircase=True)
 
 optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
 # optimizer = keras.optimizers.SGD(learning_rate=lr_schedule, momentum=train_config.LEARNING_MOMENTUM)
@@ -68,9 +68,9 @@ augmentation = iaa.Sequential([
 ])
 
 trainer = Trainer(model, train_dataset, config=train_config, optimizer=optimizer, val_evaluator=val_evaluator, augmentation=augmentation)
-trainer.train(960, 'all')
-trainer.train(540, '4+')
-trainer.train(240, 'heads')
+trainer.train(320, 'all')
+trainer.train(180, '4+')
+trainer.train(80, 'heads')
 
 class ValConfig(Config):
     # GPUS = 0,1

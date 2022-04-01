@@ -63,8 +63,8 @@ class Trainer:
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):
-            cls_attentions = np.empty([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, self.config.TOP_DOWN_PYRAMID_SIZE])
-            cls_attentions[...] = np.nan
+            cls_attentions_sum = np.zeros([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, self.config.TOP_DOWN_PYRAMID_SIZE*4])
+            cls_attentions_cnt = np.zeros([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, 1])
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
                 for i, inputs in enumerate(self.dataset):
@@ -75,7 +75,9 @@ class Trainer:
                         attentions, prn_cls = attentions
 
                         mean_loss = np.mean([loss.numpy() for loss in losses])
-                        cls_attentions[i,prn_cls,...] = attentions
+                        for prn_cls_id in prn_cls:
+                            cls_attentions_sum[i,prn_cls_id,...] += attentions
+                            cls_attentions_cnt[i,prn_cls_id,...] += 1
 
                         with self.summary_writer.as_default():
                             tf.summary.scalar('rpn_class_loss', rpn_class_loss, step=self.optimizer.iterations)
@@ -92,7 +94,9 @@ class Trainer:
                     pbar.set_postfix({'mean_loss':mean_loss,
                                        'lr': self.optimizer._decayed_lr('float32').numpy()})
 
-            attentions = np.nanmean(cls_attentions,0)
+            attentions = cls_attentions_sum/cls_attentions_cnt
+            attentions = np.where(attentions==0, np.nan, attentions)
+            attentions = np.nanmean(attentions,0)
             if not os.path.isdir('save_attentions'):
                 os.mkdir('save_attentions')
             with open(f'save_attentions/{epoch}.pickle', 'wb') as f:
