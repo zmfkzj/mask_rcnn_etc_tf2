@@ -69,14 +69,14 @@ class Trainer:
             with self.mirrored_strategy.scope():
                 for i, inputs in enumerate(self.dataset):
                     if self.config.STEPS_PER_EPOCH > i:
-                        losses, attentions = self.train_step(inputs)
+                        losses, attentions, prn_cls = self.train_step(inputs)
 
                         rpn_bbox_loss, rpn_class_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss= losses
-                        attentions, prn_cls = attentions
 
-                        mean_loss = np.mean([loss.numpy() for loss in losses])
-                        for prn_cls_id in prn_cls:
-                            cls_attentions_sum[i,prn_cls_id,...] += attentions
+                        mean_loss = np.nanmean([loss.numpy() for loss in losses])
+
+                        for cls_idx, prn_cls_id in enumerate(prn_cls):
+                            cls_attentions_sum[i,prn_cls_id,...] += attentions[cls_idx]
                             cls_attentions_cnt[i,prn_cls_id,...] += 1
 
                         with self.summary_writer.as_default():
@@ -134,6 +134,9 @@ class Trainer:
             self.optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
             return outputs
         
-        per_example_losses = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
-        mean_losses = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, per_example_losses,axis=None)
-        return mean_losses
+        losses, attentions = self.mirrored_strategy.run(step_fn, args=(dist_inputs,))
+        mean_losses = self.mirrored_strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
+        attentions, prn_cls = attentions
+        attentions = self.mirrored_strategy.gather(attentions,axis=0)
+        prn_cls = self.mirrored_strategy.gather(prn_cls,axis=0)
+        return mean_losses, attentions, prn_cls

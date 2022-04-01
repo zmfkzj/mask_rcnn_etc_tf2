@@ -151,9 +151,9 @@ class MaskRCNN(KM.Model):
                 selected_idx = tf.random.shuffle(selected_indices)[0]
                 return tf.cast(selected_idx, tf.int32)
             idx = tf.squeeze(tf.map_fn(get_gt_idx, input_gt_class_ids), 1)
-            prn_cls = tf.squeeze(tf.gather(input_gt_class_ids, idx, axis=1), 1)
-            bboxes = tf.squeeze(tf.gather(input_gt_boxes, idx, axis=1), 1)
-            gt_masks = tf.squeeze(tf.gather(input_gt_masks, idx, axis=3), 3)
+            prn_cls = tf.gather(input_gt_class_ids, idx, axis=1, batch_dims=1)
+            bboxes = tf.gather(input_gt_boxes, idx, axis=1,batch_dims=1)
+            gt_masks = tf.gather(input_gt_masks, idx, axis=3, batch_dims=1)
             gt_masks = tf.cast(gt_masks,tf.float32)
             gt_masks = tf.expand_dims(gt_masks,3)
 
@@ -216,7 +216,7 @@ class MaskRCNN(KM.Model):
             
             meta_score = self.meta_score_conv(mrcnn_class_logits)
             meta_score = tf.squeeze(meta_score, 2)
-            meta_true = tf.where(target_class_ids==prn_cls,1.,0.)
+            meta_true = tf.where(target_class_ids==tf.reshape(prn_cls,[batch_size,1]),1.,0.)
 
             rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
                                             * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)

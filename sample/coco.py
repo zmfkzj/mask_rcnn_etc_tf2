@@ -12,11 +12,11 @@ from MRCNN import MaskRCNN, Trainer, Detector, Evaluator
 from MRCNN.config import Config
 
 class TrainConfig(Config):
-    # GPUS = 0,1
-    GPUS = 0
+    GPUS = 0,1
+    # GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.00005
-    IMAGES_PER_GPU = 1
+    IMAGES_PER_GPU = 2
     STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 100
     MAX_GT_INSTANCES = 20
@@ -42,8 +42,8 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
 
 
 train_dataset = CocoDataset()
-# train_dataset.load_coco('/home/tmdocker/host/nasrw/mk/dataset/coco/train2017/', '/home/tmdocker/host/nasrw/mk/dataset/coco/annotations/instances_train2017.json')
-train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_train2017.json')
+train_dataset.load_coco('/home/tmdocker/nasrw/62Nas/mk/dataset/coco/train2017/', '/home/tmdocker/nasrw/62Nas/mk/dataset/coco/annotations/instances_train2017.json')
+# train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_train2017.json')
 
 model = MaskRCNN(train_config)
 model.load_weights('mask_rcnn_coco.h5')
@@ -55,8 +55,8 @@ optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
 
 
 # val_evaluator = Evaluator(model, 'C:/coco/train2017/', 'C:/coco/annotations/instances_train2017.json',train_config, conf_thresh=0.25, iouType='bbox')
-# val_evaluator = Evaluator(model, '/home/tmdocker/host/nasrw/mk/dataset/coco/val2017/', '/home/tmdocker/host/nasrw/mk/dataset/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25, iouType='bbox')
-val_evaluator = Evaluator(model, 'c:/coco/val2017/', 'c:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25, iouType='bbox')
+val_evaluator = Evaluator(model, '/home/tmdocker/nasrw/62Nas/mk/dataset/coco/val2017/', '/home/tmdocker/nasrw/62Nas/mk/dataset/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25, iouType='bbox')
+# val_evaluator = Evaluator(model, 'c:/coco/val2017/', 'c:/coco/annotations/instances_val2017.json',train_config, conf_thresh=0.25, iouType='bbox')
 
 augmentation = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -68,9 +68,9 @@ augmentation = iaa.Sequential([
 ])
 
 trainer = Trainer(model, train_dataset, config=train_config, optimizer=optimizer, val_evaluator=val_evaluator, augmentation=augmentation)
-trainer.train(320, 'all')
-trainer.train(180, '4+')
-trainer.train(80, 'heads')
+trainer.train(160, 'all')
+trainer.train(90, '4+')
+trainer.train(40, 'heads')
 
 class ValConfig(Config):
     # GPUS = 0,1
@@ -78,13 +78,13 @@ class ValConfig(Config):
     NUM_CLASSES = 1+80 
     IMAGES_PER_GPU = 5
 
-model = MaskRCNN(ValConfig())
-model.load_weights('save_model/ckpt-65')
+# model = MaskRCNN(ValConfig())
+# model.load_weights('save_model/ckpt-65')
 
-val_evaluator = Evaluator(model, 'c:/coco/val2017/', 'c:/coco/annotations/instances_val2017.json',ValConfig(), conf_thresh=0.25, iouType='bbox')
+# # val_evaluator = Evaluator(model, 'c:/coco/val2017/', 'c:/coco/annotations/instances_val2017.json',ValConfig(), conf_thresh=0.25, iouType='bbox')
 # val_evaluator = Evaluator(model, '/home/tmdocker/host/nasrw/mk/dataset/coco/val2017/', '/home/tmdocker/host/nasrw/mk/dataset/coco/annotations/instances_val2017.json',ValConfig(), conf_thresh=0.25, iouType='bbox')
-metric = val_evaluator.eval(save_dir='d:/')
-print(metric)
+# metric = val_evaluator.eval(save_dir='d:/')
+# print(metric)
 
 # classes = [info['name'] for info in train_dataset.class_info]
 # detector = Detector(model, classes, config)
