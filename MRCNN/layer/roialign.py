@@ -88,13 +88,12 @@ class PyramidROIAlign(KL.Layer):
             # which is how it's done in tf.crop_and_resize()
             # Result: [batch * num_boxes, pool_height, pool_width, channels]
             attention = tf.reshape(attentions[i], [-1,1,1,attentions[i].get_shape()[-1]])
+            attention = tf.broadcast_to(attention, [tf.shape(boxes)[0],1,1,attention.get_shape()[-1]])
             repeat_count = []
             for b in range(boxes.get_shape()[0]):
                 repeat_count.append(tf.reduce_sum(tf.cast(box_indices==b, tf.int32)))
             
-            attention = tf.cond(tf.shape(attention)[0]==1,
-                                lambda : attention,
-                                lambda : tf.repeat(attention,repeat_count,0))
+            attention = tf.repeat(attention,repeat_count,0)
             pooled.append(tf.image.crop_and_resize(
                 feature_maps[i], level_boxes, box_indices, self.pool_shape,
                 method="bilinear")*attention)

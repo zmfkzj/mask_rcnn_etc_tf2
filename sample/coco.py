@@ -16,7 +16,7 @@ class TrainConfig(Config):
     # GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.00005
-    IMAGES_PER_GPU = 2
+    IMAGES_PER_GPU = 3
     STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 100
     MAX_GT_INSTANCES = 20
