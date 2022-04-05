@@ -109,9 +109,13 @@ def refine_detections_graph(rois, probs, deltas, window, config):
         # Pad with zeros if detections < DETECTION_MAX_INSTANCES
         gap = config.DETECTION_MAX_INSTANCES - tf.shape(detections)[0]
         detections = tf.pad(detections, [(0, gap), (0, 0)], "CONSTANT")
-        return detections
-    detections = tf.map_fn(_refine_detections_graph, [class_ids, class_scores, refined_rois], dtype=tf.float32)
-    return detections
+        print(keep)
+        return detections, keep
+    detections, keep = tf.map_fn(_refine_detections_graph, 
+                                [class_ids, class_scores, refined_rois], 
+                                fn_output_signature=(tf.TensorSpec(shape=(config.DETECTION_MAX_INSTANCES, 6), dtype=tf.float32),
+                                                    tf.TensorSpec(shape=(None,), dtype=tf.int64)))
+    return detections, keep
 
 
 class DetectionLayer(KL.Layer):
@@ -142,7 +146,7 @@ class DetectionLayer(KL.Layer):
         window = norm_boxes_graph(m['window'], image_shape[:2])
 
         # Run detection refinement graph on each item in the batch
-        detections_batch = refine_detections_graph(rois, mrcnn_class, mrcnn_bbox, window,self.config)
+        detections_batch, keep_batch = refine_detections_graph(rois, mrcnn_class, mrcnn_bbox, window,self.config)
         # detections_batch = utils.batch_slice(
         #     [rois, mrcnn_class, mrcnn_bbox, window],
         #     lambda x, y, w, z: refine_detections_graph(x, y, w, z, self.config),
@@ -151,9 +155,8 @@ class DetectionLayer(KL.Layer):
         # Reshape output
         # [batch, num_detections, (y1, x1, y2, x2, class_id, class_score)] in
         # normalized coordinates
-        return tf.reshape(
-            detections_batch,
-            [batch_size, self.config.DETECTION_MAX_INSTANCES, 6])
+        return tf.reshape( detections_batch, [batch_size, self.config.DETECTION_MAX_INSTANCES, 6]),\
+                keep_batch
 
     def compute_output_shape(self, input_shape):
         return (None, self.config.DETECTION_MAX_INSTANCES, 6)

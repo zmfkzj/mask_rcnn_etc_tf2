@@ -92,8 +92,7 @@ class Conv_block(KM.Model):
         stride1, stride2 = self.strides
         return [None, None, None, self.nb_filter3]
 
-
-class Resnet(KM.Model):
+class Resnet_body(KM.Model):
     def __init__(self, architecture) -> None:
         assert architecture in ['resnet50','resnet101']
         super().__init__()
@@ -117,10 +116,6 @@ class Resnet(KM.Model):
         self.seq = []
         for i in range(block_count):
             self.seq.append(Identity_block([256, 256, 1024], stage=4, block=chr(98 + i)))
-        #stage 5
-        self.stage5_conv = Conv_block([512, 512, 2048], stage=5, block='a')
-        self.stage5_identity_1 = Identity_block([512, 512, 2048], stage=5, block='b')
-        self.stage5_identity_2 = Identity_block([512, 512, 2048], stage=5, block='c')
 
     def call(self, input_feature, training=True):
         #stage1
@@ -141,8 +136,20 @@ class Resnet(KM.Model):
         for block in self.seq:
             x = block(x, training=training)
         C4 = x
+        return C4
+
+class Resnet_head(KM.Model):
+    def __init__(self) -> None:
+        super().__init__()
+
         #stage 5
-        x = self.stage5_conv(x, training=training)
+        self.stage5_conv = Conv_block([512, 512, 2048], strides=(1,1), stage=5, block='a')
+        self.stage5_identity_1 = Identity_block([512, 512, 2048], stage=5, block='b')
+        self.stage5_identity_2 = Identity_block([512, 512, 2048], stage=5, block='c')
+
+    def call(self, input_feature, training=True):
+        #stage 5
+        x = self.stage5_conv(input_feature, training=training)
         x = self.stage5_identity_1(x, training=training)
         C5 = self.stage5_identity_2(x, training=training)
-        return [C1, C2, C3, C4, C5]
+        return C5

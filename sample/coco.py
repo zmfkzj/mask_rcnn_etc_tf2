@@ -24,6 +24,8 @@ class TrainConfig(Config):
     IMAGE_MAX_DIM = 1024
     BACKBONE = "resnet101"
     DETECTION_MAX_INSTANCES = 20
+    MASK_POOL_SIZE = 7
+    MASK_SHAPE = [14, 14]
     
 
 train_config = TrainConfig()
@@ -48,7 +50,7 @@ train_dataset.load_coco('/home/tmdocker/nasrw/62Nas/mk/dataset/coco/train2017/',
 model = MaskRCNN(train_config)
 model.load_weights('mask_rcnn_coco.h5')
 
-lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 100000,0.1,1000, staircase=True)
+lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 80000,0.1,1000, staircase=True)
 
 optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
 # optimizer = keras.optimizers.SGD(learning_rate=lr_schedule, momentum=train_config.LEARNING_MOMENTUM)

@@ -42,9 +42,7 @@ class PyramidROIAlign(KL.Layer):
 
         # Feature Maps. List of feature maps from different level of the
         # feature pyramid. Each is [batch, height, width, channels]
-        feature_maps = inputs[2:6]
-
-        attentions = inputs[6:]
+        feature_maps = inputs[2:]
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
         y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
@@ -57,7 +55,7 @@ class PyramidROIAlign(KL.Layer):
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
         roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
-        roi_level = tf.minimum(5, tf.maximum(
+        roi_level = tf.minimum(2, tf.maximum(
             2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
 
@@ -87,16 +85,9 @@ class PyramidROIAlign(KL.Layer):
             # Here we use the simplified approach of a single value per bin,
             # which is how it's done in tf.crop_and_resize()
             # Result: [batch * num_boxes, pool_height, pool_width, channels]
-            attention = tf.reshape(attentions[i], [-1,1,1,attentions[i].get_shape()[-1]])
-            attention = tf.broadcast_to(attention, [tf.shape(boxes)[0],1,1,attention.get_shape()[-1]])
-            repeat_count = []
-            for b in range(boxes.get_shape()[0]):
-                repeat_count.append(tf.reduce_sum(tf.cast(box_indices==b, tf.int32)))
-            
-            attention = tf.repeat(attention,repeat_count,0)
             pooled.append(tf.image.crop_and_resize(
                 feature_maps[i], level_boxes, box_indices, self.pool_shape,
-                method="bilinear")*attention)
+                method="bilinear"))
 
         # Pack pooled features into one tensor
         pooled = tf.concat(pooled, axis=0)

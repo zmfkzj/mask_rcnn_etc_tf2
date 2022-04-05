@@ -6,13 +6,12 @@ import tensorflow as tf
 import tensorflow.keras as keras
 import tensorflow.keras.layers as KL
 import tensorflow.keras.models as KM
-import cv2
 
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.layer.roialign import parse_image_meta_graph
-from . import FPN_classifier, FPN_mask, Backbone2FPN, RPN
+from . import FPN_classifier, FPN_mask,RPN, Resnet_body, Resnet_head
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 from ..model_utils.miscellenous_graph import norm_boxes_graph
 from ..utils import log, compute_backbone_shapes
@@ -49,12 +48,14 @@ class MaskRCNN(KM.Model):
         self.meta_conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='meta_conv1', use_bias=True)
         self.conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='conv1', use_bias=True)
 
-        self.backbone2fpn = Backbone2FPN(config)
-        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
+        self.backbone_body = Resnet_body(config.BACKBONE)
+        self.backbone_head = Resnet_head()
+        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_SCALES)*len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         self.ROIAlign_classifier = PyramidROIAlign([config.POOL_SIZE, config.POOL_SIZE], name="roi_align_classifier")
         self.ROIAlign_mask = PyramidROIAlign([config.MASK_POOL_SIZE, config.MASK_POOL_SIZE], name="roi_align_mask")
 
+        # self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_mask = FPN_mask(self.config.NUM_CLASSES)
 
@@ -62,13 +63,11 @@ class MaskRCNN(KM.Model):
 
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
 
-        self.attentions_layer = KL.Dense(config.TOP_DOWN_PYRAMID_SIZE, kernel_initializer=tf.initializers.HeUniform(), activation='sigmoid')
-        self.meta_cls_score = KL.Dense(1, kernel_initializer=tf.initializers.HeUniform())
-        self.meta_score_conv = KL.Conv1D(1,1)
+        self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
 
         with self.config.STRATEGY.scope():
             inputs = (tf.zeros([2,512,512,3]), tf.zeros([2,20]))
-            attention = tf.zeros([5, config.TOP_DOWN_PYRAMID_SIZE*4])
+            attention = tf.zeros([5, 2048])
             self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False, 'attentions':attention})
 
 
@@ -113,10 +112,10 @@ class MaskRCNN(KM.Model):
         active_class_ids = KL.Lambda(lambda t: parse_image_meta_graph(t))(input_image_meta)["active_class_ids"]
         x = KL.ZeroPadding2D(padding=(3,3))(input_image)
         x = self.conv1(x)
-        P2, P3, P4, P5, P6 = self.backbone2fpn(x)
+        C4 = self.backbone_body(x)
 
-        rpn_feature_maps = [P2, P3, P4, P5, P6]
-        mrcnn_feature_maps = [P2, P3, P4, P5]
+        rpn_feature_maps = [C4]
+        mrcnn_feature_maps = [C4]
 
         # Anchors
         anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
@@ -184,14 +183,11 @@ class MaskRCNN(KM.Model):
 
             x = KL.ZeroPadding2D(padding=(3,3))(input_prn)
             x = self.meta_conv1(x)
-            prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.backbone2fpn(x)
+            prn_C4 = self.backbone_body(x)
+            prn_C5 = self.backbone_head(prn_C4)
 
-            Gavg_P2 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P2))
-            Gavg_P3 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P3))
-            Gavg_P4 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P4))
-            Gavg_P5 = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_P5))
-
-            attentions = [Gavg_P2, Gavg_P3, Gavg_P4, Gavg_P5]
+            attentions = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_C5))
+            meta_score = self.meta_cls_score(attentions)
 
             # Normalize coordinates
             gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
@@ -207,16 +203,20 @@ class MaskRCNN(KM.Model):
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
             rois, target_class_ids, target_bbox, target_mask = DetectionTargetLayer(self.config, name="proposal_targets")([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            print(target_mask)
 
-            attentive_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps+attentions)
-            attentive_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps+attentions)
+            # roi_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps)
+            roi_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps)
 
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=self.config.TRAIN_BN)
+            # roi_cls_feature = tf.map_fn(self.backbone_head,roi_cls_feature)
+            roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
+
+            # attentive_cls_feature = roi_cls_feature*tf.reshape(attentions,[batch_size,1,1,1,2048])
+            attentive_seg_feature = roi_seg_feature*tf.reshape(attentions,[batch_size,1,1,1,2048])
+
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_seg_feature, training=self.config.TRAIN_BN)
             mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
             
-            meta_score = self.meta_score_conv(mrcnn_class_logits)
-            meta_score = tf.squeeze(meta_score, 2)
-            meta_true = tf.where(target_class_ids==tf.reshape(prn_cls,[batch_size,1]),1.,0.)
 
             rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
                                             * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
@@ -232,7 +232,7 @@ class MaskRCNN(KM.Model):
                                                 for w in self.trainable_weights
                                                 if 'gamma' not in w.name and 'beta' not in w.name])
             meta_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('meta_loss', 1.)
-                                    * tf.nn.sigmoid_cross_entropy_with_logits(labels= meta_true, logits=meta_score))
+                                    * tf.nn.sparse_softmax_cross_entropy_with_logits(labels= prn_cls, logits=meta_score))
             
             self.add_loss(reg_losses)
             self.add_loss(rpn_class_loss)
@@ -246,24 +246,52 @@ class MaskRCNN(KM.Model):
                     [tf.concat(attentions, -1), prn_cls]
 
         else:
+            roi_seg_feature = self.ROIAlign_mask([rpn_rois, input_image_meta] + mrcnn_feature_maps)
+            roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
 
             # Network Heads
             # Proposal classifier and BBox regressor heads
             def fpn_inference(attentions):
-                attentions = tf.split(attentions, 4)
+                attentions = tf.cast(attentions, tf.float32)
                 # attentions = tf.reshape(attentions, [1,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
 
-                attentive_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps+attentions)
-                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_cls_feature, training=False)
+                # roi_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps)
+                # roi_cls_feature = tf.map_fn(self.backbone_head,roi_cls_feature)
+                # attentive_cls_feature = roi_cls_feature*attentions
+                attentive_seg_feature = roi_seg_feature*attentions
+                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_seg_feature, training=False)
+
 
                 # Detections
                 # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
                 # normalized coordinates
-                detections = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+                detections, keep = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+                print(keep)
+                print(attentive_seg_feature)
+
+                def sel_features(inputs):
+                    attentive_feature = inputs[0]
+                    keep = inputs[1]
+                    attentive_feature = tf.gather(attentive_feature, keep)
+
+                    # Pad with zeros if detections < DETECTION_MAX_INSTANCES
+                    gap = self.config.DETECTION_MAX_INSTANCES - tf.shape(keep)[0]
+                    attentive_feature = tf.pad(attentive_feature, [(0, gap),(0, 0),(0, 0),(0, 0)], "CONSTANT")
+                    return attentive_feature
+                
+                attentive_seg_feature = tf.map_fn(sel_features, 
+                                                [attentive_seg_feature, keep],
+                                                fn_output_signature=tf.TensorSpec(shape=(self.config.DETECTION_MAX_INSTANCES,
+                                                                                        self.config.MASK_POOL_SIZE,
+                                                                                        self.config.MASK_POOL_SIZE,
+                                                                                        2048),
+                                                                                dtype=tf.float32))
 
                 # Create masks for detections
-                detection_boxes = detections[..., :4]
-                attentive_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps+attentions)
+                # detection_boxes = detections[..., :4]
+                # roi_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps)
+                # roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
+                # attentive_seg_feature = roi_seg_feature*attentions
                 mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=False)
                 return detections, mrcnn_mask
 
@@ -326,18 +354,19 @@ class MaskRCNN(KM.Model):
 
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
-        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
+        # backbone_shapes = compute_backbone_shapes(self.config, image_shape)
+        backbone_shapes = compute_backbone_shapes(self.config, image_shape)[2]
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):
             self._anchor_cache = {}
         key = tuple(image_shape)
         if not key in self._anchor_cache:
             # Generate Anchors
-            a = utils.generate_pyramid_anchors(
+            a = utils.generate_anchors(
                 self.config.RPN_ANCHOR_SCALES,
                 self.config.RPN_ANCHOR_RATIOS,
                 backbone_shapes,
-                self.config.BACKBONE_STRIDES,
+                [self.config.BACKBONE_STRIDES[2]],
                 self.config.RPN_ANCHOR_STRIDE)
             # Keep a copy of the latest anchors in pixel coordinates because
             # it's used in inspect_model notebooks.
@@ -361,7 +390,10 @@ class MaskRCNN(KM.Model):
                 if layer_name in saved_layer_names:
                     sort_key = [w.name.split('/')[-1] for w in l.weights]
                     weights = [np.array(f[f'/{layer_name}/{layer_name}/{name}']) for name in sort_key]
-                    l.set_weights(weights)
+                    try:
+                        l.set_weights(weights)
+                    except:
+                        pass
         else:
             ckpt = tf.train.Checkpoint(model=self)
             manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)

@@ -63,7 +63,7 @@ class Trainer:
         self.model.set_trainable(layers)
 
         for epoch in range(max_epoch):
-            cls_attentions_sum = np.zeros([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, self.config.TOP_DOWN_PYRAMID_SIZE*4])
+            cls_attentions_sum = np.zeros([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, 2048])
             cls_attentions_cnt = np.zeros([self.config.STEPS_PER_EPOCH, self.config.NUM_CLASSES, 1])
             pbar = tqdm(desc=f'Epoch : {epoch+1}/{max_epoch}',unit='step', total = self.config.STEPS_PER_EPOCH)
             with self.mirrored_strategy.scope():
