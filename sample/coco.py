@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras as keras
+import keras.api._v2.keras as keras
 import imgaug.augmenters as iaa
 
 gpus = tf.config.experimental.list_physical_devices('GPU')

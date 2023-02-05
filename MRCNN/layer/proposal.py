@@ -1,8 +1,9 @@
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras.layers as KL
+import keras.api._v2.keras.layers as KL
 from MRCNN import utils
 
+@tf.function
 def apply_box_deltas_graph(boxes, deltas):
     """Applies the given deltas to the given boxes.
     boxes: [N, (y1, x1, y2, x2)] boxes to update
@@ -26,23 +27,17 @@ def apply_box_deltas_graph(boxes, deltas):
     result = tf.stack([y1, x1, y2, x2], axis=2, name="apply_box_deltas_out")
     return result
 
-
+@tf.function
 def clip_boxes_graph(boxes, window):
     """
     boxes: [N, (y1, x1, y2, x2)]
     window: [4] in the form y1, x1, y2, x2
     """
     batch_size = tf.shape(boxes)[0]
-    # Split
-    if isinstance(window, np.ndarray):
-        window = tf.broadcast_to(tf.reshape(window,[1,1,4]),[batch_size,1,4])
-    else:
-        window = tf.expand_dims(window,1)
-    # window = tf.cond(tf.shape(tf.shape(window))==1,
-    #                              lambda : tf.broadcast_to(tf.reshape(window,[1,1,4]),[3,1,4]),
-    #                              lambda : tf.expand_dims(window,1))
+    window = tf.expand_dims(window,1)
     wy1, wx1, wy2, wx2 = tf.split(tf.broadcast_to(window,[batch_size,tf.shape(boxes)[1],4]),4,axis=2)
     y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
+
     # Clip
     y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
     x1 = tf.maximum(tf.minimum(x1, wx2), wx1)

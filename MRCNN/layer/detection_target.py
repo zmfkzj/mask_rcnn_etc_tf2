@@ -1,5 +1,5 @@
 import tensorflow as tf
-import tensorflow.keras.layers as KL
+import keras.api._v2.keras.layers as KL
 from ..model_utils.miscellenous_graph import trim_zeros_graph
 from MRCNN import utils
 
@@ -128,7 +128,7 @@ class Detection_targets(KL.Layer):
         roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
 
         # Compute bbox refinement for positive ROIs
-        deltas = utils.box_refinement_graph(positive_rois, roi_gt_boxes)
+        deltas = utils.box_refinement(positive_rois, roi_gt_boxes)
         deltas /= config.BBOX_STD_DEV
 
         # Assign positive ROIs to GT masks

@@ -1,6 +1,9 @@
 logs*
 save_model*
 mask_rcnn_coco.h5
+nohup.out
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

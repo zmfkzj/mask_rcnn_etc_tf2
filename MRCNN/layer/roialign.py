@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras.layers as KL
+import keras.api._v2.keras.layers as KL
 from ..model_utils.data_formatting import parse_image_meta_graph
 
 def log2_graph(x):
@@ -32,24 +32,16 @@ class PyramidROIAlign(KL.Layer):
         super(PyramidROIAlign, self).__init__(**kwargs)
         self.pool_shape = tuple(pool_shape)
 
-    def call(self, inputs):
-        # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
-        boxes = inputs[0]
-
-        # Image meta
-        # Holds details about the image. See compose_image_meta()
-        image_meta = inputs[1]
-
-        # Feature Maps. List of feature maps from different level of the
-        # feature pyramid. Each is [batch, height, width, channels]
-        feature_maps = inputs[2:]
-
+    def call(self, 
+             boxes, # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
+             image_shape, 
+             feature_maps):# Feature Maps. List of feature maps from different level of the feature pyramid. Each is [batch, height, width, channels]
+        
+        
         # Assign each ROI to a level in the pyramid based on the ROI area.
         y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
         h = y2 - y1
         w = x2 - x1
-        # Use shape of first image. Images in a batch must have the same size.
-        image_shape = parse_image_meta_graph(image_meta)['image_shape'][0]
         # Equation 1 in the Feature Pyramid Networks paper. Account for
         # the fact that our coordinates are normalized here.
         # e.g. a 224x224 ROI (in pixels) maps to P4

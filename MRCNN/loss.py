@@ -1,7 +1,7 @@
 import tensorflow as tf
-import tensorflow.keras as K
-import tensorflow.keras.layers as KL
-import tensorflow.keras.models as KM
+import keras.api._v2.keras as K
+import keras.api._v2.keras.layers as KL
+import keras.api._v2.keras.models as KM
 
 from MRCNN.model_utils.miscellenous_graph import batch_pack_graph
 
@@ -38,7 +38,7 @@ def rpn_class_loss_graph(rpn_match, rpn_class_logits):
     return loss
 
 
-def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
+def rpn_bbox_loss_graph(batch_size, target_bbox, rpn_match, rpn_bbox):
     """Return the RPN bounding box loss graph.
 
     config: the model config object.
@@ -58,8 +58,7 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
 
     # Trim target bounding box deltas to the same length as rpn_bbox.
     batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int32), axis=1)
-    target_bbox = batch_pack_graph(target_bbox, batch_counts,
-                                   config.IMAGES_PER_GPU)
+    target_bbox = batch_pack_graph(target_bbox, batch_counts, batch_size)
 
     loss = smooth_l1_loss(target_bbox, rpn_bbox)
     

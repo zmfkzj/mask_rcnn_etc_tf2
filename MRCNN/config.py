@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import keras.api._v2.keras as keras
 
 
 # Base Configuration Class
@@ -44,7 +45,8 @@ class Config(object):
     # You can also provide a callable that should have the signature
     # of model.resnet_graph. If you do so, you need to supply a callable
     # to COMPUTE_BACKBONE_SHAPE as well
-    BACKBONE = "resnet101"
+    BACKBONE = keras.applications.ResNet101
+    PREPROCESSING = keras.applications.resnet.preprocess_input
 
     # Only useful if you supply a callable to BACKBONE. Should compute
     # the shape of each layer of the FPN Pyramid.

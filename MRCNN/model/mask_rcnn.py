@@ -1,20 +1,26 @@
 import re
-import sys
-from telnetlib import GA
-import numpy as np
+
+import keras.api._v2.keras as keras
+import keras.api._v2.keras.layers as KL
+import keras.api._v2.keras.models as KM
 import tensorflow as tf
-import tensorflow.keras as keras
-import tensorflow.keras.layers as KL
-import tensorflow.keras.models as KM
+import tensorflow_addons as tfa
+import tensorflow_models as tfm
+from official.vision.ops.iou_similarity import iou
+from pycocotools.coco import COCO
 
 from MRCNN import utils
 from MRCNN.config import Config
-from MRCNN.loss import mrcnn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_mask_loss_graph, rpn_bbox_loss_graph, rpn_class_loss_graph
 from MRCNN.layer.roialign import parse_image_meta_graph
-from . import FPN_classifier, FPN_mask,RPN, Resnet_body, Resnet_head
-from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
+from MRCNN.loss import (mrcnn_bbox_loss_graph, mrcnn_class_loss_graph,
+                        mrcnn_mask_loss_graph, rpn_bbox_loss_graph,
+                        rpn_class_loss_graph)
+
+from ..layer import (DetectionLayer, DetectionTargetLayer, ProposalLayer,
+                     PyramidROIAlign)
 from ..model_utils.miscellenous_graph import norm_boxes_graph
-from ..utils import log, compute_backbone_shapes
+from ..utils import compute_backbone_shapes, log
+from . import RPN, FPN_classifier, FPN_mask, Neck
 
 
 class MaskRCNN(KM.Model):
@@ -23,7 +29,7 @@ class MaskRCNN(KM.Model):
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, config:Config):
+    def __init__(self, config:Config, coco_json):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -31,6 +37,7 @@ class MaskRCNN(KM.Model):
         """
         super().__init__(name='mask_rcnn')
         self.config = config
+        self.coco = COCO(coco_json)
 
         if isinstance(config.GPUS, int):
             gpus = [config.GPUS]
@@ -45,80 +52,74 @@ class MaskRCNN(KM.Model):
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
 
+        #parts
         self.meta_conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='meta_conv1', use_bias=True)
-        self.conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='conv1', use_bias=True)
+        self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
 
-        self.backbone_body = Resnet_body(config.BACKBONE)
-        self.backbone_head = Resnet_head()
+        self.backbone = self.make_backbone_model(config.BACKBONE, config.PREPROCESSING)
+        self.neck = Neck(config)
+
         self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_SCALES)*len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         self.ROIAlign_classifier = PyramidROIAlign([config.POOL_SIZE, config.POOL_SIZE], name="roi_align_classifier")
         self.ROIAlign_mask = PyramidROIAlign([config.MASK_POOL_SIZE, config.MASK_POOL_SIZE], name="roi_align_mask")
 
-        # self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_mask = FPN_mask(self.config.NUM_CLASSES)
 
         self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
-
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
 
-        self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
+        #excuting models
+        self.predict_model = self.make_predict_model()
+        self.test_model = self.make_test_model()
+        self.train_model = self.make_train_model()
+    
 
-        with self.config.STRATEGY.scope():
-            inputs = (tf.zeros([2,512,512,3]), tf.zeros([2,20]))
-            attention = tf.zeros([5, 2048])
-            self.config.STRATEGY.run(self, args=(*inputs,), kwargs={'training':False, 'attentions':attention})
+    def predict_step(self, data):
+        input_images, input_window, origin_image_shapes = data
+        detections, mrcnn_mask = self.predict_model(input_images, input_window)
 
+        all_rois = []
+        all_class_ids = []
+        all_scores = []
+        all_masks = []
 
-    def call(self, input_image, 
-                    input_image_meta=None, 
-                    input_rpn_match=None, 
-                    input_rpn_bbox=None,
-                    input_gt_class_ids=None, 
-                    input_gt_boxes=None, 
-                    input_gt_masks=None, 
-                    input_rois = None,
-                    attentions = None,
-                    training=True):
+        batch_size = tf.shape(input_images)[0]
+        for i in tf.range(batch_size):
+            boxes, class_ids, scores, full_masks = \
+                            self.unmold_detections(detections[i],mrcnn_mask[i],origin_image_shapes[i],tf.shape(input_images[i]), input_window[i])
+            all_rois.append(boxes)
+            all_class_ids.append(class_ids)
+            all_scores.append(scores)
+            all_masks.append(full_masks)
+        
+        all_rois = tf.stack(all_rois)
+        all_class_ids = tf.stack(all_class_ids)
+        all_scores = tf.stack(all_scores)
+        all_masks = tf.stack(all_masks)
 
-        # Build the shared convolutional layers.
-        # Bottom-up Layers
-        # Returns a list of the last layers of each stage, 5 in total.
-        # Don't create the thead (stage 5), so we pick the 4th item in the list.
-        batch_size = input_image.shape[0]
-        if batch_size == 0:
-            rpn_count = tf.reduce_sum([tf.reduce_prod(tf.shape(f)[1:3])*len(self.config.RPN_ANCHOR_RATIOS) for f in rpn_feature_maps])
-            rpn_bbox = tf.zeros([batch_size,rpn_count,4], dtype=tf.float32)
+        return all_rois, all_class_ids, all_scores, all_masks
             
-            if training:
-                rpn_class_loss = tf.zeros((), dtype=tf.float32)
-                rpn_bbox_loss = tf.zeros((), dtype=tf.float32)
-                class_loss = tf.zeros((), dtype=tf.float32)
-                bbox_loss = tf.zeros((), dtype=tf.float32)
-                mask_loss = tf.zeros((), dtype=tf.float32)
-                output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
-                return output
-            else:
-                detections = tf.zeros([batch_size,self.config.DETECTION_MAX_INSTANCES,6], dtype=tf.float32)
-                mrcnn_class = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,self.config.NUM_CLASSES], dtype=tf.float32)
-                mrcnn_bbox = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,self.config.NUM_CLASSES,4], dtype=tf.float32)
-                rpn_rois = tf.zeros([batch_size,self.config.POST_NMS_ROIS_INFERENCE,4], dtype=tf.float32)
-                rpn_class = tf.zeros([batch_size,rpn_count,2], dtype=tf.float32)
-                mrcnn_mask = tf.zeros([batch_size,int(self.config.POST_NMS_ROIS_INFERENCE/10),self.config.MASK_SHAPE[0],self.config.MASK_SHAPE[1],self.config.NUM_CLASSES], dtype=tf.float32)
-                output = [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask, rpn_rois, rpn_class, rpn_bbox]
-                return output
 
-        active_class_ids = KL.Lambda(lambda t: parse_image_meta_graph(t))(input_image_meta)["active_class_ids"]
-        x = KL.ZeroPadding2D(padding=(3,3))(input_image)
-        x = self.conv1(x)
-        C4 = self.backbone_body(x)
 
-        rpn_feature_maps = [C4]
-        mrcnn_feature_maps = [C4]
+    def test_step(self, data):
+        detections, mrcnn_mask = self.test_model(*data)
 
-        # Anchors
-        anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+
+    def train_step(self, data):
+        return super().train_step(data)   
+
+    def make_predict_model(self):
+        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='input_image')
+        input_window = KL.Input(shape=(), name="input_window")
+
+        backbone_output = self.backbone(input_image)
+        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        
+
+        rpn_feature_maps = [P2, P3, P4, P5, P6]
+        mrcnn_feature_maps = [P2, P3, P4, P5]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -136,185 +137,135 @@ class MaskRCNN(KM.Model):
         # Generate proposals
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
         # and zero padded.
-        proposal_count = self.config.POST_NMS_ROIS_TRAINING if training else self.config.POST_NMS_ROIS_INFERENCE
+        batch_size = tf.shape(input_image)[0]
+        anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+        proposal_count = self.config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         
+        roi_cls_feature = self.ROIAlign_classifier(rpn_rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
 
-        if training:
-            def get_gt_idx(gt_cls_ids):
-                positive_cls_ids = tf.gather(gt_cls_ids, tf.where(gt_cls_ids>=0))
-                positive_cls_ids = tf.squeeze(positive_cls_ids, 1)
-                unique_cls_ids,unique_cls_idx  = tf.unique(positive_cls_ids)
-                selected_cls_id = tf.random.shuffle(unique_cls_ids)[0]
-                selected_indices = tf.where(gt_cls_ids==selected_cls_id)
-                selected_idx = tf.random.shuffle(selected_indices)[0]
-                return tf.cast(selected_idx, tf.int32)
-            idx = tf.squeeze(tf.map_fn(get_gt_idx, input_gt_class_ids), 1)
-            prn_cls = tf.gather(input_gt_class_ids, idx, axis=1, batch_dims=1)
-            bboxes = tf.gather(input_gt_boxes, idx, axis=1,batch_dims=1)
-            gt_masks = tf.gather(input_gt_masks, idx, axis=3, batch_dims=1)
-            gt_masks = tf.cast(gt_masks,tf.float32)
-            gt_masks = tf.expand_dims(gt_masks,3)
+        # Network Heads
+        # Proposal classifier and BBox regressor heads
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
+        detections = DetectionLayer(self.config, name="mrcnn_detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
 
-            def make_prn_maks(gt_mask, bbox):
-                y1 = bbox[0]
-                x1 = bbox[1]
-                y2 = bbox[2]
-                x2 = bbox[3]
-                h = y2-y1
-                w = x2-x1
-                prn_mask = tf.zeros([*input_image.get_shape()[1:3], 1], tf.float32)
-                def _make_prn_maks(prn_mask, gt_mask):
-                    gt_mask = tf.image.resize(gt_mask,[h,w])
-                    prn_ys, prn_xs = tf.meshgrid(tf.range(y1,y2),tf.range(x1,x2))
-                    gt_ys, gt_xs = tf.meshgrid(tf.range(h),tf.range(w))
-                    prn_indices = tf.transpose([tf.reshape(prn_ys, [-1]),tf.reshape(prn_xs, [-1])])
-                    gt_indices = tf.transpose([tf.reshape(gt_ys, [-1]),tf.reshape(gt_xs, [-1])])
-                    prn_mask = tf.tensor_scatter_nd_update(prn_mask, prn_indices, tf.gather_nd(gt_mask, gt_indices))
-                    return prn_mask
-                prn_mask = tf.cond(h==0 or w==0,lambda: prn_mask, lambda: _make_prn_maks(prn_mask, gt_mask))
-                return prn_mask
+        # Create masks for detections
+        detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
+        roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        mrcnn_mask = self.fpn_mask(roi_seg_feature, train_bn=False)
 
-            prn_masks = tf.map_fn(lambda inputs: make_prn_maks(inputs[0], inputs[1]), [gt_masks, bboxes],
-                                fn_output_signature=tf.TensorSpec(shape=(*input_image.get_shape()[1:3], 1), dtype=tf.float32))
-            prn_masks = tf.image.resize(prn_masks,[224,224])
-            image = tf.image.resize(input_image,[224,224])
-            input_prn = tf.concat([image, prn_masks], 3)
+        model = keras.Model([input_image, input_window],
+                            [detections, mrcnn_mask],
+                            name='mask_rcnn')
+        return model
+    
 
-            x = KL.ZeroPadding2D(padding=(3,3))(input_prn)
-            x = self.meta_conv1(x)
-            prn_C4 = self.backbone_body(x)
-            prn_C5 = self.backbone_head(prn_C4)
+    def make_test_model(self):
+        return self.make_predict_model()
+    
 
-            attentions = KL.Activation(tf.nn.sigmoid)(KL.GlobalAvgPool2D()(prn_C5))
-            meta_score = self.meta_cls_score(attentions)
+    def make_train_model(self):
+        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="input_image")
+        active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="input_class_ids")
+        # RPN GT
+        input_rpn_match = KL.Input( shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
+        input_rpn_bbox = KL.Input( shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
 
-            # Normalize coordinates
-            gt_boxes = norm_boxes_graph(tf.cast(input_gt_boxes,tf.float32), input_image.shape[1:3])
+        # Detection GT (class IDs, bounding boxes, and masks)
+        # 1. GT Class IDs (zero padded)
+        input_gt_class_ids = KL.Input( shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+        # 2. GT Boxes in pixels (zero padded)
+        # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
+        input_gt_boxes = KL.Input( shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
+        # Normalize coordinates
+        gt_boxes = KL.Lambda(lambda x: norm_boxes_graph( x, tf.shape(input_image)[1:3]))(input_gt_boxes)
+        # 3. GT Masks (zero padded)
+        # [batch, height, width, MAX_GT_INSTANCES]
+        input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="input_gt_masks", dtype=bool)
 
-            if not self.config.USE_RPN_ROIS:
-                # Normalize coordinates
-                target_rois = norm_boxes_graph(tf.cast(input_rois,tf.float32), input_image.shape[1:3])
-            else:
-                target_rois = rpn_rois
+        backbone_output = self.backbone(input_image)
+        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        
 
-            # Generate detection targets
-            # Subsamples proposals and generates target outputs for training
-            # Note that proposal class IDs, gt_boxes, and gt_masks are zero
-            # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask = DetectionTargetLayer(self.config, name="proposal_targets")([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
-            print(target_mask)
+        rpn_feature_maps = [P2, P3, P4, P5, P6]
+        mrcnn_feature_maps = [P2, P3, P4, P5]
 
-            # roi_cls_feature = self.ROIAlign_classifier([rois, input_image_meta] + mrcnn_feature_maps)
-            roi_seg_feature = self.ROIAlign_mask([rois, input_image_meta] + mrcnn_feature_maps)
+        # Loop through pyramid layers
+        layer_outputs = []  # list of lists
+        for p in rpn_feature_maps:
+            layer_outputs.append(self.rpn(p))
+        # Concatenate layer outputs
+        # Convert from list of lists of level outputs to list of lists
+        # of outputs across levels.
+        # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
+        outputs = list(zip(*layer_outputs))
+        outputs = [c(list(o)) for o, c in zip(outputs, self.concats)]
 
-            # roi_cls_feature = tf.map_fn(self.backbone_head,roi_cls_feature)
-            roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
+        rpn_class_logits, rpn_class, rpn_bbox = outputs
 
-            # attentive_cls_feature = roi_cls_feature*tf.reshape(attentions,[batch_size,1,1,1,2048])
-            attentive_seg_feature = roi_seg_feature*tf.reshape(attentions,[batch_size,1,1,1,2048])
-
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_seg_feature, training=self.config.TRAIN_BN)
-            mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=self.config.TRAIN_BN)
-            
-
-            rpn_class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-                                            * rpn_class_loss_graph(input_rpn_match, rpn_class_logits), keepdims=True)
-            rpn_bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.) 
-                                            * rpn_bbox_loss_graph(self.config,input_rpn_bbox, input_rpn_match, rpn_bbox), keepdims=True)
-            class_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.) 
-                                        * mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits, active_class_ids), keepdims=True)
-            bbox_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.) 
-                                        * mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox), keepdims=True)
-            mask_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.) 
-                                        * mrcnn_mask_loss_graph(target_mask, target_class_ids, mrcnn_mask), keepdims=True)
-            reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                                                for w in self.trainable_weights
-                                                if 'gamma' not in w.name and 'beta' not in w.name])
-            meta_loss = tf.reduce_mean(self.config.LOSS_WEIGHTS.get('meta_loss', 1.)
-                                    * tf.nn.sparse_softmax_cross_entropy_with_logits(labels= prn_cls, logits=meta_score))
-            
-            self.add_loss(reg_losses)
-            self.add_loss(rpn_class_loss)
-            self.add_loss(rpn_bbox_loss)
-            self.add_loss(class_loss)
-            self.add_loss(bbox_loss)
-            self.add_loss(mask_loss)
-            self.add_loss(meta_loss)
-
-            output = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss, reg_losses, meta_loss],\
-                    [tf.concat(attentions, -1), prn_cls]
-
-        else:
-            roi_seg_feature = self.ROIAlign_mask([rpn_rois, input_image_meta] + mrcnn_feature_maps)
-            roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
-
-            # Network Heads
-            # Proposal classifier and BBox regressor heads
-            def fpn_inference(attentions):
-                attentions = tf.cast(attentions, tf.float32)
-                # attentions = tf.reshape(attentions, [1,1,1,1,self.config.TOP_DOWN_PYRAMID_SIZE])
-
-                # roi_cls_feature = self.ROIAlign_classifier([rpn_rois, input_image_meta] + mrcnn_feature_maps)
-                # roi_cls_feature = tf.map_fn(self.backbone_head,roi_cls_feature)
-                # attentive_cls_feature = roi_cls_feature*attentions
-                attentive_seg_feature = roi_seg_feature*attentions
-                mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(attentive_seg_feature, training=False)
+        # Generate proposals
+        # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
+        # and zero padded.
+        batch_size = tf.shape(input_image)[0]
+        anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
+        proposal_count = self.config.POST_NMS_ROIS_INFERENCE
+        rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
 
 
-                # Detections
-                # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
-                # normalized coordinates
-                detections, keep = DetectionLayer(self.config, name="mrcnn_detection")([rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
-                print(keep)
-                print(attentive_seg_feature)
+        # Generate detection targets
+        # Subsamples proposals and generates target outputs for training
+        # Note that proposal class IDs, gt_boxes, and gt_masks are zero
+        # padded. Equally, returned rois and targets are zero padded.
+        rois, target_class_ids, target_bbox, target_mask =\
+            DetectionTargetLayer(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+        
+        roi_cls_features = self.ROIAlign_classifier(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        roi_mask_features = self.ROIAlign_mask(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
 
-                def sel_features(inputs):
-                    attentive_feature = inputs[0]
-                    keep = inputs[1]
-                    attentive_feature = tf.gather(attentive_feature, keep)
+        # Network Heads
+        # TODO: verify that this handles zero padded ROIs
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_features)
+        mrcnn_mask = self.fpn_mask(roi_mask_features)
 
-                    # Pad with zeros if detections < DETECTION_MAX_INSTANCES
-                    gap = self.config.DETECTION_MAX_INSTANCES - tf.shape(keep)[0]
-                    attentive_feature = tf.pad(attentive_feature, [(0, gap),(0, 0),(0, 0),(0, 0)], "CONSTANT")
-                    return attentive_feature
-                
-                attentive_seg_feature = tf.map_fn(sel_features, 
-                                                [attentive_seg_feature, keep],
-                                                fn_output_signature=tf.TensorSpec(shape=(self.config.DETECTION_MAX_INSTANCES,
-                                                                                        self.config.MASK_POOL_SIZE,
-                                                                                        self.config.MASK_POOL_SIZE,
-                                                                                        2048),
-                                                                                dtype=tf.float32))
+        # Losses
+        rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")( [input_rpn_match, rpn_class_logits])
+        rpn_bbox_loss = KL.Lambda(lambda x: rpn_bbox_loss_graph(batch_size, *x), name="rpn_bbox_loss")( [input_rpn_bbox, input_rpn_match, rpn_bbox])
+        class_loss = KL.Lambda(lambda x: mrcnn_class_loss_graph(*x), name="mrcnn_class_loss")( [target_class_ids, mrcnn_class_logits, active_class_ids])
+        bbox_loss = KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x), name="mrcnn_bbox_loss")( [target_bbox, target_class_ids, mrcnn_bbox])
+        mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")( [target_mask, target_class_ids, mrcnn_mask])
 
-                # Create masks for detections
-                # detection_boxes = detections[..., :4]
-                # roi_seg_feature = self.ROIAlign_mask([detection_boxes, input_image_meta] + mrcnn_feature_maps)
-                # roi_seg_feature = tf.map_fn(self.backbone_head,roi_seg_feature)
-                # attentive_seg_feature = roi_seg_feature*attentions
-                mrcnn_mask = self.fpn_mask(attentive_seg_feature, training=False)
-                return detections, mrcnn_mask
+        # Model
+        inputs = [input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
+        outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
 
-            detections, mrcnn_mask = \
-                tf.map_fn(fpn_inference, attentions, fn_output_signature=(tf.TensorSpec(shape=(batch_size, 
-                                                                                            self.config.DETECTION_MAX_INSTANCES,
-                                                                                            6), 
-                                                                                        dtype=tf.float32),
-                                                                        tf.TensorSpec(shape=(batch_size,
-                                                                                            self.config.DETECTION_MAX_INSTANCES,
-                                                                                            self.config.MASK_POOL_SIZE*2,
-                                                                                            self.config.MASK_POOL_SIZE*2,
-                                                                                            self.config.NUM_CLASSES), 
-                                                                                    dtype=tf.float32),
-                                                                        )
-                        )
-            detections = tf.squeeze(tf.concat(tf.split(detections, detections.get_shape()[0]),2),0)
-            mrcnn_mask = tf.squeeze(tf.concat(tf.split(mrcnn_mask, mrcnn_mask.get_shape()[0]),2),0)
+        model = keras.Model(inputs, outputs, name='mask_rcnn')
+
+        reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                        for w in model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name]
+        model.add_loss(tf.add_n(reg_losses))
+        model.add_loss(outputs)
+        return model
 
 
-            output = [detections, mrcnn_mask]
 
-        return output
+    def make_backbone_model(self, backbone, preprocessing_function):
+        backbone:KM.Model = backbone(include_top=False)
+
+        i = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8)
+        x = tf.cast(i, tf.float32)
+        x = preprocessing_function(x)
+        x = backbone(x)
+
+        output = []
+        for i,layer in enumerate(backbone.layers[:-1]):
+            if layer.output_shape[1:3] != backbone.layers[i+1].output_shape[1:3]:
+                output.append(layer.output)
+        output.append(x)
+
+        model = keras.Model(inputs=[i], outputs=output[-4:])
+        
+        return model
+        
 
     def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
         """Sets model layers as trainable if their names match
@@ -354,19 +305,18 @@ class MaskRCNN(KM.Model):
 
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
-        # backbone_shapes = compute_backbone_shapes(self.config, image_shape)
-        backbone_shapes = compute_backbone_shapes(self.config, image_shape)[2]
+        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):
             self._anchor_cache = {}
         key = tuple(image_shape)
         if not key in self._anchor_cache:
             # Generate Anchors
-            a = utils.generate_anchors(
+            a = utils.generate_pyramid_anchors(
                 self.config.RPN_ANCHOR_SCALES,
                 self.config.RPN_ANCHOR_RATIOS,
                 backbone_shapes,
-                [self.config.BACKBONE_STRIDES[2]],
+                self.config.BACKBONE_STRIDES,
                 self.config.RPN_ANCHOR_STRIDE)
             # Keep a copy of the latest anchors in pixel coordinates because
             # it's used in inspect_model notebooks.
@@ -377,38 +327,103 @@ class MaskRCNN(KM.Model):
         return self._anchor_cache[key]
     
     def load_weights(self, filepath):
-        from pathlib import Path
-        if Path(filepath).suffix == '.h5':
-            import h5py
-            import numpy as np
+        import h5py
 
-            f = h5py.File(filepath, mode='r')
-            saved_layer_names = [name.decode('utf-8') for name in f.attrs['layer_names']]
-            weighted_layers = collect_layers(self)
-            for l in weighted_layers:
-                layer_name = l.name
-                if layer_name in saved_layer_names:
-                    sort_key = [w.name.split('/')[-1] for w in l.weights]
-                    weights = [np.array(f[f'/{layer_name}/{layer_name}/{name}']) for name in sort_key]
-                    try:
-                        l.set_weights(weights)
-                    except:
-                        pass
-        else:
-            ckpt = tf.train.Checkpoint(model=self)
-            manager = tf.train.CheckpointManager(ckpt, directory='save_model', max_to_keep=None)
-            status = ckpt.restore(filepath)
+        f = h5py.File(filepath, mode='r')
+        saved_root_layer_names = [name if isinstance(name, str) else name.decode('utf-8') for name in f.attrs['layer_names']]
+        saved_weight_names = []
+        saved_weight_values = []
+        for ln in saved_root_layer_names:
+            for wn in f[ln].attrs['weight_names']:
+                if not isinstance(wn, str):
+                    wn = wn.decode('utf-8') 
+                saved_weight_values.append(f[f'/{ln}/{wn}'])
+                saved_weight_names.append('/'.join(wn.split('/')[-2:]))
+        saved_weights = dict(zip(saved_weight_names,saved_weight_values))
+        model_layers = self.collect_layers(self)
+        for l in model_layers.values():
+            for w in l.weights:
+                weight_name = '/'.join(w.name.split('/')[-2:])
+                if (weight_name in saved_weights) and (tuple(w.shape)==saved_weights[weight_name].shape):
+                    w.assign(np.array(saved_weights[weight_name]))
+                else:
+                    print(f'{weight_name}\ can\'t assign')
         return self
-    
-    @property
-    def is_restore(self):
-        return self._restore
 
-def collect_layers(model):
-    layers = []
-    if isinstance(model, KM.Model):
-        for layer in model.layers:
-            layers.extend(collect_layers(layer))
-    else:
-        layers.append(model)
-    return layers
+    def collect_layers(self, model):
+        layers = {}
+        if isinstance(model, KM.Model):
+            for layer in model.layers:
+                layers.update(self.collect_layers(layer))
+        else:
+            layers[model.name]=model
+        return layers
+
+    @tf.function
+    def unmold_detections(self, detections, mrcnn_mask, original_image_shape, image_shape, window):
+        """Reformats the detections of one image from the format of the neural
+        network output to a format suitable for use in the rest of the
+        application.
+
+        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+        mrcnn_mask: [N, height, width, num_classes]
+        original_image_shape: [H, W, C] Original image shape before resizing
+        image_shape: [H, W, C] Shape of the image after resizing and padding
+        window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+                image is excluding the padding.
+
+        Returns:
+        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+        class_ids: [N] Integer class IDs for each bounding box
+        scores: [N] Float probability scores of the class_id
+        masks: [height, width, num_instances] Instance masks
+        """
+        # How many detections do we have?
+        # Detections array is padded with zeros. Find the first class_id == 0.
+        zero_ix = tf.where(detections[:, 4] == 0)[0]
+        N = tf.cond(tf.shape(zero_ix)[0],
+                    lambda: zero_ix[0],
+                    lambda: tf.shape(detections)[0])
+
+        # Extract boxes, class_ids, scores, and class-specific masks
+        boxes = detections[:N, :4]
+        class_ids = tf.cast(detections[:N, 4],tf.int32)
+        scores = detections[:N, 5]
+        masks = mrcnn_mask[:N, :, :, class_ids]
+
+        # Translate normalized coordinates in the resized image to pixel
+        # coordinates in the original image before resizing
+        window = utils.norm_boxes(window, image_shape[:2])
+        wy1 = window[0]
+        wx1 = window[1]
+        wy2 = window[2]
+        wx2 = window[3]
+        shift = tf.sta([wy1, wx1, wy1, wx1])
+        wh = wy2 - wy1  # window height
+        ww = wx2 - wx1  # window width
+        scale = tf.sta([wh, ww, wh, ww])
+        # Convert boxes to normalized coordinates on the window
+        boxes = tf.divide(boxes - shift, scale)
+        # Convert boxes to pixel coordinates on the original image
+        boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
+
+        # Filter out detections with zero area. Happens in early training when
+        # network weights are still random
+        exclude_ix = tf.where( (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+        boxes = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(boxes, exclude_ix, axis=0), lambda: boxes)
+        class_ids = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(class_ids, exclude_ix, axis=0), lambda: class_ids)
+        scores = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(scores, exclude_ix, axis=0), lambda: scores)
+        masks = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(masks, exclude_ix, axis=0), lambda: masks)
+        N = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: tf.shape(class_ids)[0], lambda: N)
+
+        # Resize masks to original image size and set boundary threshold.
+        full_masks = []
+        for i in tf.range(N):
+            # Convert neural network mask to full size mask
+            full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
+            full_masks.append(full_mask)
+        full_masks = tf.cond(N>0,
+                            lambda: tf.stack(full_masks, axis=-1),
+                            lambda: tf.zeros(original_image_shape[:2] + (0,)))
+
+        return boxes, class_ids, scores, full_masks

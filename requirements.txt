@@ -3,9 +3,11 @@ scipy
 scikit-image
 opencv-python
 imgaug
-tensorflow==2.7.1
+tensorflow>=2.11
 h5py
 pycocotools
 tqdm
 pandas
 openpyxl
+tf-models-official
+tensorflow-addons
