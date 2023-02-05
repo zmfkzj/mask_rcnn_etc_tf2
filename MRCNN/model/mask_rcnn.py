@@ -77,34 +77,18 @@ class MaskRCNN(KM.Model):
     
 
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes = data
+        input_images, input_window, origin_image_shapes, path = data
         detections, mrcnn_mask = self.predict_model(input_images, input_window)
 
-        all_rois = []
-        all_class_ids = []
-        all_scores = []
-        all_masks = []
-
-        batch_size = tf.shape(input_images)[0]
-        for i in tf.range(batch_size):
-            boxes, class_ids, scores, full_masks = \
-                            self.unmold_detections(detections[i],mrcnn_mask[i],origin_image_shapes[i],tf.shape(input_images[i]), input_window[i])
-            all_rois.append(boxes)
-            all_class_ids.append(class_ids)
-            all_scores.append(scores)
-            all_masks.append(full_masks)
-        
-        all_rois = tf.stack(all_rois)
-        all_class_ids = tf.stack(all_class_ids)
-        all_scores = tf.stack(all_scores)
-        all_masks = tf.stack(all_masks)
-
-        return all_rois, all_class_ids, all_scores, all_masks
+        return detections,mrcnn_mask,origin_image_shapes, input_window, path
             
 
 
     def test_step(self, data):
-        detections, mrcnn_mask = self.test_model(*data)
+        input_images, input_window, origin_image_shapes, path = data
+        detections, mrcnn_mask = self.predict_model(input_images, input_window)
+
+        return detections,mrcnn_mask,origin_image_shapes, input_window, path
 
 
     def train_step(self, data):
@@ -358,72 +342,3 @@ class MaskRCNN(KM.Model):
         else:
             layers[model.name]=model
         return layers
-
-    @tf.function
-    def unmold_detections(self, detections, mrcnn_mask, original_image_shape, image_shape, window):
-        """Reformats the detections of one image from the format of the neural
-        network output to a format suitable for use in the rest of the
-        application.
-
-        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
-        mrcnn_mask: [N, height, width, num_classes]
-        original_image_shape: [H, W, C] Original image shape before resizing
-        image_shape: [H, W, C] Shape of the image after resizing and padding
-        window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
-                image is excluding the padding.
-
-        Returns:
-        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
-        class_ids: [N] Integer class IDs for each bounding box
-        scores: [N] Float probability scores of the class_id
-        masks: [height, width, num_instances] Instance masks
-        """
-        # How many detections do we have?
-        # Detections array is padded with zeros. Find the first class_id == 0.
-        zero_ix = tf.where(detections[:, 4] == 0)[0]
-        N = tf.cond(tf.shape(zero_ix)[0],
-                    lambda: zero_ix[0],
-                    lambda: tf.shape(detections)[0])
-
-        # Extract boxes, class_ids, scores, and class-specific masks
-        boxes = detections[:N, :4]
-        class_ids = tf.cast(detections[:N, 4],tf.int32)
-        scores = detections[:N, 5]
-        masks = mrcnn_mask[:N, :, :, class_ids]
-
-        # Translate normalized coordinates in the resized image to pixel
-        # coordinates in the original image before resizing
-        window = utils.norm_boxes(window, image_shape[:2])
-        wy1 = window[0]
-        wx1 = window[1]
-        wy2 = window[2]
-        wx2 = window[3]
-        shift = tf.sta([wy1, wx1, wy1, wx1])
-        wh = wy2 - wy1  # window height
-        ww = wx2 - wx1  # window width
-        scale = tf.sta([wh, ww, wh, ww])
-        # Convert boxes to normalized coordinates on the window
-        boxes = tf.divide(boxes - shift, scale)
-        # Convert boxes to pixel coordinates on the original image
-        boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
-
-        # Filter out detections with zero area. Happens in early training when
-        # network weights are still random
-        exclude_ix = tf.where( (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
-        boxes = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(boxes, exclude_ix, axis=0), lambda: boxes)
-        class_ids = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(class_ids, exclude_ix, axis=0), lambda: class_ids)
-        scores = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(scores, exclude_ix, axis=0), lambda: scores)
-        masks = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: np.delete(masks, exclude_ix, axis=0), lambda: masks)
-        N = tf.cond(tf.shape(exclude_ix)[0] > 0, lambda: tf.shape(class_ids)[0], lambda: N)
-
-        # Resize masks to original image size and set boundary threshold.
-        full_masks = []
-        for i in tf.range(N):
-            # Convert neural network mask to full size mask
-            full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
-            full_masks.append(full_mask)
-        full_masks = tf.cond(N>0,
-                            lambda: tf.stack(full_masks, axis=-1),
-                            lambda: tf.zeros(original_image_shape[:2] + (0,)))
-
-        return boxes, class_ids, scores, full_masks

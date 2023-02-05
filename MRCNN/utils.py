@@ -296,3 +296,84 @@ def compute_backbone_shapes(config:Config):
     output_shapes = list(sorted(set([tuple(layer.output_shape[1:3]) for layer in backbone.layers]), reverse=True))
     output_shapes = [shape for shape in output_shapes if len(shape)==2 and np.all(config.IMAGE_SHAPE[:2]%np.array(shape)==0) and np.all(np.array(shape)!=1)]
     return np.array(output_shapes[-5:])
+
+
+@tf.function
+def unmold_detections(detections, mrcnn_mask, original_image_shape, image_shape, window):
+    """Reformats the detections of one image from the format of the neural
+    network output to a format suitable for use in the rest of the
+    application.
+
+    detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+    mrcnn_mask: [N, height, width, num_classes]
+    original_image_shape: [H, W, C] Original image shape before resizing
+    image_shape: [H, W, C] Shape of the image after resizing and padding
+    window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+            image is excluding the padding.
+
+    Returns:
+    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+    class_ids: [N] Integer class IDs for each bounding box
+    scores: [N] Float probability scores of the class_id
+    masks: [height, width, num_instances] Instance masks
+    """
+    # How many detections do we have?
+    # Detections array is padded with zeros. Find the first class_id == 0.
+    zero_ix = tf.where(detections[:, 4] == 0)[0]
+    N = tf.cond(tf.shape(zero_ix)[0] > 0,
+                lambda: zero_ix[0],
+                lambda: tf.shape(detections)[0])
+
+    # Extract boxes, class_ids, scores, and class-specific masks
+    boxes = detections[:N, :4]
+    class_ids = tf.cast(detections[:N, 4],tf.int32)
+    scores = detections[:N, 5]
+    masks = mrcnn_mask[:N, :, :, class_ids]
+
+    # Translate normalized coordinates in the resized image to pixel
+    # coordinates in the original image before resizing
+    window = norm_boxes(window, image_shape[:2])
+    wy1 = window[0]
+    wx1 = window[1]
+    wy2 = window[2]
+    wx2 = window[3]
+    shift = tf.stack([wy1, wx1, wy1, wx1])
+    wh = wy2 - wy1  # window height
+    ww = wx2 - wx1  # window width
+    scale = tf.stack([wh, ww, wh, ww])
+    # Convert boxes to normalized coordinates on the window
+    boxes = tf.divide(boxes - shift, scale)
+    # Convert boxes to pixel coordinates on the original image
+    boxes = denorm_boxes(boxes, original_image_shape[:2])
+
+    # Filter out detections with zero area. Happens in early training when
+    # network weights are still random
+    include_ix = tf.where( (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) > 0)[0]
+    exclude_ix = tf.where( (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+    boxes = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                    lambda: tf.gather(boxes, include_ix, axis=0), 
+                    lambda: boxes)
+    class_ids = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                        lambda: tf.gather(class_ids, include_ix, axis=0), 
+                        lambda: class_ids)
+    scores = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                    lambda: tf.gather(scores, include_ix, axis=0), 
+                        lambda: scores)
+    masks = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                    lambda: tf.gather(masks, include_ix, axis=0), 
+                    lambda: masks)
+    N = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                lambda: tf.shape(class_ids)[0], 
+                lambda: N)
+
+    # Resize masks to original image size and set boundary threshold.
+    full_masks = []
+    for i in tf.range(N):
+        # Convert neural network mask to full size mask
+        full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
+        full_masks.append(full_mask)
+    full_masks = tf.cond(N>0,
+                        lambda: tf.stack(full_masks, axis=-1),
+                        lambda: tf.zeros(original_image_shape[:2] + (0,)))
+
+    return boxes, class_ids, scores, full_masks
