@@ -8,7 +8,7 @@ for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
 from MRCNN.data.data_loader import CocoDataset
-from MRCNN import MaskRCNN, Trainer, Detector, Evaluator
+from MRCNN import MaskRcnn, Trainer, Detector, Evaluator
 from MRCNN.config import Config
 
 class TrainConfig(Config):
@@ -47,7 +47,7 @@ train_dataset = CocoDataset()
 train_dataset.load_coco('/home/tmdocker/nasrw/62Nas/mk/dataset/coco/train2017/', '/home/tmdocker/nasrw/62Nas/mk/dataset/coco/annotations/instances_train2017.json')
 # train_dataset.load_coco('c:/coco/train2017/', 'c:/coco/annotations/instances_train2017.json')
 
-model = MaskRCNN(train_config)
+model = MaskRcnn(train_config)
 model.load_weights('mask_rcnn_coco.h5')
 
 lr_schedule = CustomScheduler(train_config.LEARNING_RATE, 80000,0.1,1000, staircase=True)

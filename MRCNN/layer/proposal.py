@@ -6,8 +6,8 @@ from MRCNN import utils
 @tf.function
 def apply_box_deltas_graph(boxes, deltas):
     """Applies the given deltas to the given boxes.
-    boxes: [N, (y1, x1, y2, x2)] boxes to update
-    deltas: [N, (dy, dx, log(dh), log(dw))] refinements to apply
+    boxes: [batch, N, (y1, x1, y2, x2)] boxes to update
+    deltas: [batch, N, (dy, dx, log(dh), log(dw))] refinements to apply
     """
     # Convert to y, x, h, w
     height = boxes[..., 2] - boxes[..., 0]
@@ -24,7 +24,7 @@ def apply_box_deltas_graph(boxes, deltas):
     x1 = center_x - 0.5 * width
     y2 = y1 + height
     x2 = x1 + width
-    result = tf.stack([y1, x1, y2, x2], axis=2, name="apply_box_deltas_out")
+    result = tf.stack([y1, x1, y2, x2], axis=1, name="apply_box_deltas_out")
     return result
 
 @tf.function
@@ -33,18 +33,16 @@ def clip_boxes_graph(boxes, window):
     boxes: [N, (y1, x1, y2, x2)]
     window: [4] in the form y1, x1, y2, x2
     """
-    batch_size = tf.shape(boxes)[0]
-    window = tf.expand_dims(window,1)
-    wy1, wx1, wy2, wx2 = tf.split(tf.broadcast_to(window,[batch_size,tf.shape(boxes)[1],4]),4,axis=2)
-    y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
-
+    # Split
+    wy1, wx1, wy2, wx2 = tf.split(window, 4)
+    y1, x1, y2, x2 = tf.split(boxes, 4, axis=1)
     # Clip
     y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
     x1 = tf.maximum(tf.minimum(x1, wx2), wx1)
     y2 = tf.maximum(tf.minimum(y2, wy2), wy1)
     x2 = tf.maximum(tf.minimum(x2, wx2), wx1)
-    clipped = tf.concat([y1, x1, y2, x2], axis=2, name="clipped_boxes")
-    clipped.set_shape((clipped.shape[0], clipped.shape[1], 4))
+    clipped = tf.concat([y1, x1, y2, x2], axis=1, name="clipped_boxes")
+    clipped.set_shape((clipped.shape[0], 4))
     return clipped
 
 
@@ -73,7 +71,7 @@ class ProposalLayer(KL.Layer):
         scores = inputs[0][:, :, 1]
         # Box deltas [batch, num_rois, 4]
         deltas = inputs[1]
-        deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4])
+        deltas = deltas * tf.cast(tf.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4]),tf.float32)
         # Anchors
         anchors = inputs[2]
         proposal_count = inputs[3]
@@ -89,16 +87,12 @@ class ProposalLayer(KL.Layer):
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
-        boxes = apply_box_deltas_graph(pre_nms_anchors,deltas)
+        boxes = tf.vectorized_map(lambda x:apply_box_deltas_graph(*x),[pre_nms_anchors,deltas])
 
         # Clip to image boundaries. Since we're in normalized coordinates,
         # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
-        window = np.array([0, 0, 1, 1], dtype=np.float32)
-        boxes = clip_boxes_graph(boxes, window)
-        # boxes = utils.batch_slice(boxes,
-        #                           lambda x: clip_boxes_graph(x, window),
-        #                           batch_size,
-        #                           names=["refined_anchors_clipped"])
+        window = tf.stack([0., 0., 1., 1.])
+        boxes = tf.vectorized_map(lambda boxes:clip_boxes_graph(boxes, window),boxes)
 
         # Filter out small boxes
         # According to Xinlei Chen's paper, this reduces detection accuracy
@@ -116,7 +110,7 @@ class ProposalLayer(KL.Layer):
             padding = tf.maximum(proposal_count - tf.shape(proposals)[0], 0)
             proposals = tf.pad(proposals, [(0, padding), (0, 0)])
             return proposals
-        proposals = tf.map_fn(nms,[boxes, scores], dtype=tf.float32)
+        proposals = tf.vectorized_map(nms,[boxes, scores])
         
         return proposals
 

@@ -35,5 +35,5 @@ setup(
     packages=["MRCNN"],
     install_requires=install_reqs,
     include_package_data=True,
-    python_requires='>=3.9'
+    python_requires='>=3.6,<3.10'
 )

@@ -1,3 +1,4 @@
+from copy import deepcopy
 import math
 import random
 import shutil
@@ -262,7 +263,7 @@ def norm_boxes(boxes, shape):
     w = shape[1]
     scale = tf.stack([h - 1, w - 1, h - 1, w - 1])
     shift = tf.stack([0, 0, 1, 1])
-    return tf.cast(tf.divide((boxes - shift), scale),tf.float32)
+    return tf.divide((tf.cast(boxes,tf.float32) - tf.cast(shift, tf.float32)), tf.cast(scale,tf.float32))
 
 
 
@@ -291,15 +292,14 @@ def compute_backbone_shapes(config:Config):
     Returns:
         [N, (height, width)]. Where N is the number of stages
     """
-    backbone = config.BACKBONE(input_shape=list(config.IMAGE_SHAPE), include_top=False)
+    backbone = deepcopy(config.BACKBONE)(input_shape=list(config.IMAGE_SHAPE), include_top=False)
 
     output_shapes = list(sorted(set([tuple(layer.output_shape[1:3]) for layer in backbone.layers]), reverse=True))
     output_shapes = [shape for shape in output_shapes if len(shape)==2 and np.all(config.IMAGE_SHAPE[:2]%np.array(shape)==0) and np.all(np.array(shape)!=1)]
     return np.array(output_shapes[-5:])
 
 
-@tf.function
-def unmold_detections(detections, mrcnn_mask, original_image_shape, image_shape, window):
+def unmold_detections(detections, original_image_shape, image_shape, window, mrcnn_mask=None):
     """Reformats the detections of one image from the format of the neural
     network output to a format suitable for use in the rest of the
     application.
@@ -328,7 +328,8 @@ def unmold_detections(detections, mrcnn_mask, original_image_shape, image_shape,
     boxes = detections[:N, :4]
     class_ids = tf.cast(detections[:N, 4],tf.int32)
     scores = detections[:N, 5]
-    masks = mrcnn_mask[:N, :, :, class_ids]
+    if mrcnn_mask is not None:
+        masks = mrcnn_mask[:N, :, :, class_ids]
 
     # Translate normalized coordinates in the resized image to pixel
     # coordinates in the original image before resizing
@@ -359,21 +360,25 @@ def unmold_detections(detections, mrcnn_mask, original_image_shape, image_shape,
     scores = tf.cond(tf.shape(exclude_ix)[0] > 0, 
                     lambda: tf.gather(scores, include_ix, axis=0), 
                         lambda: scores)
-    masks = tf.cond(tf.shape(exclude_ix)[0] > 0, 
-                    lambda: tf.gather(masks, include_ix, axis=0), 
-                    lambda: masks)
+    if mrcnn_mask is not None:
+        masks = tf.cond(tf.shape(exclude_ix)[0] > 0, 
+                        lambda: tf.gather(masks, include_ix, axis=0), 
+                        lambda: masks)
     N = tf.cond(tf.shape(exclude_ix)[0] > 0, 
                 lambda: tf.shape(class_ids)[0], 
                 lambda: N)
 
-    # Resize masks to original image size and set boundary threshold.
-    full_masks = []
-    for i in tf.range(N):
-        # Convert neural network mask to full size mask
-        full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
-        full_masks.append(full_mask)
-    full_masks = tf.cond(N>0,
-                        lambda: tf.stack(full_masks, axis=-1),
-                        lambda: tf.zeros(original_image_shape[:2] + (0,)))
+    if mrcnn_mask is not None:
+        # Resize masks to original image size and set boundary threshold.
+        full_masks = []
+        for i in tf.range(N):
+            # Convert neural network mask to full size mask
+            full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
+            full_masks.append(full_mask)
+        full_masks = tf.cond(N>0,
+                            lambda: tf.stack(full_masks, axis=-1),
+                            lambda: tf.zeros(original_image_shape[:2] + (0,)))
+    else:
+        full_masks = None
 
     return boxes, class_ids, scores, full_masks

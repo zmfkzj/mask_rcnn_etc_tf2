@@ -214,14 +214,8 @@ class DetectionTargetLayer(KL.Layer):
 
         # Slice the batch and run a graph for each slice
         # TODO: Rename target_bbox to target_deltas for clarity
-        outputs = tf.map_fn(lambda t: self.detection_targets_graph(*t, self.config),
-                            [proposals, gt_class_ids, gt_boxes, gt_masks], 
-                            dtype=(tf.float32,tf.int32,tf.float32,tf.float32))
-        # names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
-        # outputs = utils.batch_slice(
-        #     [proposals, gt_class_ids, gt_boxes, gt_masks],
-        #     lambda w, x, y, z: self.detection_targets_graph( w, x, y, z, self.config),
-        #     batch_size, names=names)
+        outputs = tf.vectorized_map(lambda t: self.detection_targets_graph(*t, self.config),
+                            [proposals, gt_class_ids, gt_boxes, gt_masks])
         return outputs
 
     def compute_output_shape(self, input_shape):

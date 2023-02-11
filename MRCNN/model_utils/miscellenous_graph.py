@@ -1,4 +1,5 @@
 import tensorflow as tf
+import keras.api._v2.keras.layers as KL
 
 @tf.function
 def trim_zeros_graph(boxes, name='trim_zeros'):
@@ -13,33 +14,33 @@ def trim_zeros_graph(boxes, name='trim_zeros'):
     return boxes, non_zeros
 
 
-@tf.function
-def batch_pack_graph(x, counts, num_rows):
-    """Picks different number of values from each row
-    in x depending on the values in counts.
-    """
-    outputs = []
-    for i in range(num_rows):
-        outputs.append(x[i, :counts[i]])
-    return tf.concat(outputs, axis=0)
+class BatchPackGraph(KL.Layer):
+    def call(self, x, counts, num_rows):
+        """Picks different number of values from each row
+        in x depending on the values in counts.
+        """
+        outputs = tf.TensorArray(tf.float32, size=num_rows)
+        for i in tf.range(num_rows):
+            outputs.write(i, x[i, :counts[i]])
+        return outputs.concat()
 
 
-@tf.function
-def norm_boxes_graph(boxes, shape):
-    """Converts boxes from pixel coordinates to normalized coordinates.
-    boxes: [..., (y1, x1, y2, x2)] in pixel coordinates
-    shape: [..., (height, width)] in pixels
+class NormBoxesGraph(KL.Layer):
+    def call(self, boxes, shape):
+        """Converts boxes from pixel coordinates to normalized coordinates.
+        boxes: [..., (y1, x1, y2, x2)] in pixel coordinates
+        shape: [..., (height, width)] in pixels
 
-    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
-    coordinates it's inside the box.
+        Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
+        coordinates it's inside the box.
 
-    Returns:
-        [..., (y1, x1, y2, x2)] in normalized coordinates
-    """
-    h, w = tf.split(tf.cast(shape, tf.float32), 2)
-    scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
-    shift = tf.constant([0., 0., 1., 1.])
-    return tf.divide(boxes - shift, scale)
+        Returns:
+            [..., (y1, x1, y2, x2)] in normalized coordinates
+        """
+        h, w = tf.split(tf.cast(shape, tf.float32), 2)
+        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
+        shift = tf.constant([0., 0., 1., 1.])
+        return tf.divide(boxes - shift, scale)
 
 @tf.function
 def denorm_boxes_graph(boxes, shape):

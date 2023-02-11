@@ -45,8 +45,8 @@ class Config(object):
     # You can also provide a callable that should have the signature
     # of model.resnet_graph. If you do so, you need to supply a callable
     # to COMPUTE_BACKBONE_SHAPE as well
-    BACKBONE = keras.applications.ResNet101
-    PREPROCESSING = keras.applications.resnet.preprocess_input
+    BACKBONE = staticmethod(keras.applications.ResNet101)
+    PREPROCESSING = staticmethod(keras.applications.resnet.preprocess_input)
 
     # Only useful if you supply a callable to BACKBONE. Should compute
     # the shape of each layer of the FPN Pyramid.

@@ -3,6 +3,7 @@ import re
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
+import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
 import tensorflow_models as tfm
@@ -11,25 +12,25 @@ from pycocotools.coco import COCO
 
 from MRCNN import utils
 from MRCNN.config import Config
+from MRCNN.data.dataset import Dataset
 from MRCNN.layer.roialign import parse_image_meta_graph
-from MRCNN.loss import (mrcnn_bbox_loss_graph, mrcnn_class_loss_graph,
-                        mrcnn_mask_loss_graph, rpn_bbox_loss_graph,
-                        rpn_class_loss_graph)
+from MRCNN.metric import CocoMetric
+from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 
 from ..layer import (DetectionLayer, DetectionTargetLayer, ProposalLayer,
                      PyramidROIAlign)
-from ..model_utils.miscellenous_graph import norm_boxes_graph
-from ..utils import compute_backbone_shapes, log
+from ..model_utils.miscellenous_graph import NormBoxesGraph
+from ..utils import compute_backbone_shapes
 from . import RPN, FPN_classifier, FPN_mask, Neck
 
 
-class MaskRCNN(KM.Model):
+class MaskRcnn(KM.Model):
     """Encapsulates the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, config:Config, coco_json):
+    def __init__(self, config:Config, dataset:Dataset):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -37,7 +38,7 @@ class MaskRCNN(KM.Model):
         """
         super().__init__(name='mask_rcnn')
         self.config = config
-        self.coco = COCO(coco_json)
+        self.dataset = dataset
 
         if isinstance(config.GPUS, int):
             gpus = [config.GPUS]
@@ -56,7 +57,7 @@ class MaskRCNN(KM.Model):
         self.meta_conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='meta_conv1', use_bias=True)
         self.meta_cls_score = KL.Dense(config.NUM_CLASSES, kernel_initializer=tf.initializers.HeUniform())
 
-        self.backbone = self.make_backbone_model(config.BACKBONE, config.PREPROCESSING)
+        self.backbone = self.make_backbone_model()
         self.neck = Neck(config)
 
         self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_SCALES)*len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
@@ -74,29 +75,44 @@ class MaskRCNN(KM.Model):
         self.predict_model = self.make_predict_model()
         self.test_model = self.make_test_model()
         self.train_model = self.make_train_model()
+
+    
+    def compile(self, coco_metric:CocoMetric, optimizer="rmsprop", loss=None, metrics=None, loss_weights=None, weighted_metrics=None, run_eagerly=None, steps_per_execution=None, jit_compile=None, **kwargs):
+        self.coco_metric = coco_metric
+        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
     
 
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, path = data
-        detections, mrcnn_mask = self.predict_model(input_images, input_window)
+        input_images, input_window, origin_image_shapes, image_ids = data
+        detections, mrcnn_mask = self.predict_model(input_images, input_window, training=False)
 
-        return detections,mrcnn_mask,origin_image_shapes, input_window, path
+        return detections,mrcnn_mask,origin_image_shapes, input_window, image_ids
             
 
 
     def test_step(self, data):
-        input_images, input_window, origin_image_shapes, path = data
-        detections, mrcnn_mask = self.predict_model(input_images, input_window)
+        input_images, input_window, origin_image_shapes, image_ids = data
+        detections, mrcnn_mask = self.predict_model(input_images, input_window, training=False)
 
-        return detections,mrcnn_mask,origin_image_shapes, input_window, path
+        self.coco_metric.update_state(image_ids, detections, origin_image_shapes, input_window, mrcnn_mask)
+        results = self.coco_metric.result()
+        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = tf.unstack(results)
+        return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
 
 
     def train_step(self, data):
-        return super().train_step(data)   
+        with tf.GradientTape() as tape:
+            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = self.train_model(*data, training=True)
+        gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+
+        reg_losses = self.train_model.losses[0]
+
+        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses}
 
     def make_predict_model(self):
         input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='input_image')
-        input_window = KL.Input(shape=(), name="input_window")
+        input_window = KL.Input(shape=(4,), name="input_window")
 
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
@@ -136,7 +152,7 @@ class MaskRCNN(KM.Model):
         # Create masks for detections
         detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
         roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        mrcnn_mask = self.fpn_mask(roi_seg_feature, train_bn=False)
+        mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
 
         model = keras.Model([input_image, input_window],
                             [detections, mrcnn_mask],
@@ -162,7 +178,7 @@ class MaskRCNN(KM.Model):
         # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
         input_gt_boxes = KL.Input( shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
         # Normalize coordinates
-        gt_boxes = KL.Lambda(lambda x: norm_boxes_graph( x, tf.shape(input_image)[1:3]))(input_gt_boxes)
+        gt_boxes = NormBoxesGraph()(input_gt_boxes, tf.shape(input_image)[1:3])
         # 3. GT Masks (zero padded)
         # [batch, height, width, MAX_GT_INSTANCES]
         input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="input_gt_masks", dtype=bool)
@@ -212,11 +228,11 @@ class MaskRCNN(KM.Model):
         mrcnn_mask = self.fpn_mask(roi_mask_features)
 
         # Losses
-        rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")( [input_rpn_match, rpn_class_logits])
-        rpn_bbox_loss = KL.Lambda(lambda x: rpn_bbox_loss_graph(batch_size, *x), name="rpn_bbox_loss")( [input_rpn_bbox, input_rpn_match, rpn_bbox])
-        class_loss = KL.Lambda(lambda x: mrcnn_class_loss_graph(*x), name="mrcnn_class_loss")( [target_class_ids, mrcnn_class_logits, active_class_ids])
-        bbox_loss = KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x), name="mrcnn_bbox_loss")( [target_bbox, target_class_ids, mrcnn_bbox])
-        mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")( [target_mask, target_class_ids, mrcnn_mask])
+        rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits)
+        rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+        class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
+        bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
+        mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask)
 
         # Model
         inputs = [input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
@@ -226,27 +242,33 @@ class MaskRCNN(KM.Model):
 
         reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                         for w in model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name]
-        model.add_loss(tf.add_n(reg_losses))
+        model.add_loss(lambda: tf.add_n(reg_losses))
         model.add_loss(outputs)
         return model
 
 
 
-    def make_backbone_model(self, backbone, preprocessing_function):
-        backbone:KM.Model = backbone(include_top=False)
+    def make_backbone_model(self):
 
-        i = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8)
-        x = tf.cast(i, tf.float32)
-        x = preprocessing_function(x)
+        input = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name="input_backbone")
+        x = KL.Lambda(lambda y:tf.cast(y, tf.float32), name='cast')(input)
+        x = KL.Lambda(self.config.PREPROCESSING, name='preprocessing')(x)
+        backbone:KM.Model = self.config.BACKBONE(input_tensor=x,include_top=False)
         x = backbone(x)
 
         output = []
         for i,layer in enumerate(backbone.layers[:-1]):
-            if layer.output_shape[1:3] != backbone.layers[i+1].output_shape[1:3]:
+            if (shape:=layer.output_shape[1:3]) != backbone.layers[i+1].output_shape[1:3] \
+                and len(shape)==2 \
+                and tf.reduce_all(self.config.IMAGE_SHAPE[:2]%shape==0) \
+                and tf.reduce_all(shape!=1):
+
                 output.append(layer.output)
         output.append(x)
+        output =output[-4:]
+        # output = KL.Lambda(lambda y: y[-4:], name='pick_last_four_output')(output)
 
-        model = keras.Model(inputs=[i], outputs=output[-4:])
+        model = keras.Model(inputs=input, outputs=output)
         
         return model
         
@@ -257,7 +279,7 @@ class MaskRCNN(KM.Model):
         """
         # Print message on the first call (but not on recursive calls)
         if verbose > 0 and keras_model is None:
-            log("Selecting layers to train")
+            print("Selecting layers to train")
 
         keras_model:KM.Model = keras_model or self
 
@@ -284,12 +306,12 @@ class MaskRCNN(KM.Model):
                 layer.trainable = trainable
             # Print trainable layer names
             if trainable and verbose > 0:
-                log("{}{:20}   ({})".format(" " * indent, layer.name,
+                print("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
-        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
+        backbone_shapes = compute_backbone_shapes(self.config)
         # Cache anchors and reuse if image shape is the same
         if not hasattr(self, "_anchor_cache"):
             self._anchor_cache = {}
