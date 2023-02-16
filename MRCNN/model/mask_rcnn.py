@@ -83,16 +83,16 @@ class MaskRcnn(KM.Model):
     
 
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, image_ids = data
+        input_images, input_window, origin_image_shapes, pathes = data
         detections, mrcnn_mask = self.predict_model(input_images, input_window, training=False)
 
-        return detections,mrcnn_mask,origin_image_shapes, input_window, image_ids
+        return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
             
 
 
     def test_step(self, data):
         input_images, input_window, origin_image_shapes, image_ids = data
-        detections, mrcnn_mask = self.predict_model(input_images, input_window, training=False)
+        detections, mrcnn_mask = self.test_model(input_images, input_window, training=False)
 
         self.coco_metric.update_state(image_ids, detections, origin_image_shapes, input_window, mrcnn_mask)
         results = self.coco_metric.result()
@@ -115,11 +115,11 @@ class MaskRcnn(KM.Model):
         input_window = KL.Input(shape=(4,), name="input_window")
 
         backbone_output = self.backbone(input_image)
-        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        P3,P4,P5,P6 = self.neck(*backbone_output)
         
 
-        rpn_feature_maps = [P2, P3, P4, P5, P6]
-        mrcnn_feature_maps = [P2, P3, P4, P5]
+        rpn_feature_maps = [P3, P4, P5, P6]
+        mrcnn_feature_maps = [P3, P4, P5]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -184,11 +184,11 @@ class MaskRcnn(KM.Model):
         input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="input_gt_masks", dtype=bool)
 
         backbone_output = self.backbone(input_image)
-        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        P3,P4,P5,P6 = self.neck(*backbone_output)
         
 
-        rpn_feature_maps = [P2, P3, P4, P5, P6]
-        mrcnn_feature_maps = [P2, P3, P4, P5]
+        rpn_feature_maps = [P3, P4, P5, P6]
+        mrcnn_feature_maps = [P3, P4, P5]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -235,7 +235,7 @@ class MaskRcnn(KM.Model):
         mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask)
 
         # Model
-        inputs = [input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
+        inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
         outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
 
         model = keras.Model(inputs, outputs, name='mask_rcnn')
@@ -265,7 +265,7 @@ class MaskRcnn(KM.Model):
 
                 output.append(layer.output)
         output.append(x)
-        output =output[-4:]
+        output =output[-3:]
         # output = KL.Lambda(lambda y: y[-4:], name='pick_last_four_output')(output)
 
         model = keras.Model(inputs=input, outputs=output)

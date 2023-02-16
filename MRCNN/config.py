@@ -57,7 +57,8 @@ class Config(object):
 
     # The strides of each layer of the FPN Pyramid. These values
     # are based on a Resnet101 backbone.
-    BACKBONE_STRIDES = [4, 8, 16, 32, 64]
+    # BACKBONE_STRIDES = [4, 8, 16, 32, 64]
+    BACKBONE_STRIDES = [2, 4, 8, 16]
 
     # Size of the fully-connected layers in the classification graph
     FPN_CLASSIF_FC_LAYERS_SIZE = 1024
@@ -69,7 +70,8 @@ class Config(object):
     NUM_CLASSES = 1  # Override in sub-classes
 
     # Length of square anchor side in pixels
-    RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)
+    # RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)
+    RPN_ANCHOR_SCALES = (16, 32, 64, 128)
 
     # Ratios of anchors at each cell (width/height)
     # A value of 1 represents a square anchor, and 0.5 is a wide anchor
@@ -99,7 +101,7 @@ class Config(object):
     USE_MINI_MASK = True
     MINI_MASK_SHAPE = (56, 56)  # (height, width) of the mini-mask
 
-    # Input image resizing
+    # Input image resizinga7c202b9-6da1-44fa-8359-7cfa1c8576f7
     # Generally, use the "square" resizing mode for training and predicting
     # and it should work well in most cases. In this mode, images are scaled
     # up such that the small side is = IMAGE_MIN_DIM, but ensuring that the

@@ -19,10 +19,11 @@ class BatchPackGraph(KL.Layer):
         """Picks different number of values from each row
         in x depending on the values in counts.
         """
-        outputs = tf.TensorArray(tf.float32, size=num_rows)
-        for i in tf.range(num_rows):
-            outputs.write(i, x[i, :counts[i]])
-        return outputs.concat()
+        shape = x[0, :counts[0]].shape
+        outputs = tf.zeros([num_rows, *shape], dtype=tf.float32)
+        indices = tf.expand_dims(tf.range(num_rows),1)
+        outputs = tf.tensor_scatter_nd_update(outputs, indices, tf.gather(x, tf.range(num_rows))[:, :counts[0]])
+        return outputs
 
 
 class NormBoxesGraph(KL.Layer):

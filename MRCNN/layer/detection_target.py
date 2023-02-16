@@ -47,7 +47,7 @@ class Detection_targets(KL.Layer):
                 be zero padded if there are not enough proposals.
         gt_class_ids: [MAX_GT_INSTANCES] int class IDs
         gt_boxes: [MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized coordinates.
-        gt_masks: [height, width, MAX_GT_INSTANCES] of boolean type.
+        gt_masks: [MAX_GT_INSTANCES, height, width] of boolean type.
 
         Returns: Target ROIs and corresponding class IDs, bounding box shifts,
         and masks.
@@ -72,7 +72,7 @@ class Detection_targets(KL.Layer):
         gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
         gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
                                     name="trim_gt_class_ids")
-        gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
+        gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=0,
                             name="trim_gt_masks")
 
         # Handle COCO crowds
@@ -83,7 +83,7 @@ class Detection_targets(KL.Layer):
         crowd_boxes = tf.gather(gt_boxes, crowd_ix)
         gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
         gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
-        gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
+        gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=0)
 
         # Compute overlaps matrix [proposals, gt_boxes]
         overlaps = self.overlaps_graph(proposals, gt_boxes)
@@ -133,7 +133,7 @@ class Detection_targets(KL.Layer):
 
         # Assign positive ROIs to GT masks
         # Permute masks to [N, height, width, 1]
-        transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
+        transposed_masks = tf.expand_dims(gt_masks, -1)
         # Pick the right mask for each ROI
         roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
 
