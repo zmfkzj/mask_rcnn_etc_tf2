@@ -334,8 +334,8 @@ class DataLoader:
         x1,y1,w,h = ann['bbox']
         box = np.array((y1,x1,y1+h,x1+w))
 
-        y1, x1, y2, x2 = box
-        area = y2-y1*x2-x1
+        y1, x1, y2, x2 = np.round(box)
+        area = (y2-y1)*(x2-x1)
         if area == 0:
             return None
 
