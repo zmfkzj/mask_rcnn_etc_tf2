@@ -57,9 +57,9 @@ class DetectionLayer(KL.Layer):
             coordinates are normalized.
         """
         # Class IDs per ROI
-        class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
+        class_ids = tf.argmax(probs, axis=1, output_type=tf.int64)
         # Class probability of the top class of each ROI
-        indices = tf.stack([tf.range(tf.shape(probs)[0]), class_ids], axis=1)
+        indices = tf.stack([tf.cast(tf.range(tf.shape(probs)[0]), tf.int64), class_ids], axis=1)
         class_scores = tf.gather_nd(probs, indices)
         # Class-specific bounding box deltas
         deltas_specific = tf.gather_nd(deltas, indices)

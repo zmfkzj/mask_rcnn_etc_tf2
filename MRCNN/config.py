@@ -221,6 +221,7 @@ class Config(object):
             gpus = self.GPUS
         self.STRATEGY = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus], cross_device_ops=self.CROSS_DEVICE_OPS)
         self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
+        self.TEST_BATCH_SIZE = self.BATCH_SIZE * 5
 
         # Input image size
         if self.IMAGE_RESIZE_MODE == "crop":

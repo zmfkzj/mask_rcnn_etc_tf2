@@ -42,12 +42,12 @@ def parse_image_meta(meta):
 
     active_class_ids = meta[:, 12:]
     return {
-        "image_id": image_id.astype(np.int32),
-        "original_image_shape": original_image_shape.astype(np.int32),
-        "image_shape": image_shape.astype(np.int32),
-        "window": window.astype(np.int32),
+        "image_id": image_id.astype(np.int64),
+        "original_image_shape": original_image_shape.astype(np.int64),
+        "image_shape": image_shape.astype(np.int64),
+        "window": window.astype(np.int64),
         "scale": scale.astype(np.float32),
-        "active_class_ids": active_class_ids.astype(np.int32),
+        "active_class_ids": active_class_ids.astype(np.int64),
     }
 
 

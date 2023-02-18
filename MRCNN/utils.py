@@ -140,7 +140,7 @@ def denorm_boxes(boxes, shape):
     w = shape[1]
     scale = tf.stack([h - 1, w - 1, h - 1, w - 1])
     shift = tf.stack([0, 0, 1, 1])
-    return tf.cast(tf.round(tf.multiply(boxes, scale) + shift),tf.int32)
+    return tf.cast(tf.round(tf.multiply(boxes, scale) + shift),tf.int64)
 
 
 def compute_backbone_shapes(config:Config):
@@ -183,7 +183,7 @@ def unmold_detections(detections, original_image_shape, image_shape, window, mrc
 
     # Extract boxes, class_ids, scores, and class-specific masks
     boxes = detections[:N, :4]
-    class_ids = tf.cast(detections[:N, 4],tf.int32)
+    class_ids = tf.cast(detections[:N, 4],tf.int64)
     scores = detections[:N, 5]
     if mrcnn_mask is not None:
         masks = mrcnn_mask[:N, :, :, class_ids]

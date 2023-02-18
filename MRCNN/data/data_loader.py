@@ -1,19 +1,20 @@
-from dataclasses import InitVar
-from enum import Enum
 import os
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import ClassVar, Optional, Union
+from typing import Optional, Union
+
 import imgaug.augmenters as iaa
 import numpy as np
 import tensorflow as tf
 from imgaug.augmentables.bbs import BoundingBoxesOnImage
 from imgaug.augmenters import Sequential
 from pycocotools import mask as maskUtils
-from dataclasses import dataclass
 
 from MRCNN.config import Config
-from MRCNN.data.dataset import Annotation, Dataset
-from MRCNN.utils import compute_backbone_shapes, compute_overlaps, generate_pyramid_anchors
+from MRCNN.data.dataset import Dataset
+from MRCNN.utils import (compute_backbone_shapes, compute_overlaps,
+                         generate_pyramid_anchors)
 
 
 class Mode(Enum):
@@ -27,10 +28,12 @@ class DataLoader:
     config:Config
     active_class_ids:list[int]
     mode:Mode
+    batch_size:int
     dataset:Optional[Dataset] = None
     image_pathes:Optional[Union[str,list[str]]] = None
     data_loader:Optional[tf.data.Dataset] = None
-    augmentation:Optional[Sequential] = None
+    augmentations:Optional[Sequential] = None
+    shuffle_buffer_size:int = 1024
 
     def __post_init__(self):
         backbone_shapes = compute_backbone_shapes(self.config)
@@ -46,10 +49,10 @@ class DataLoader:
 
         if self.mode == Mode.TRAIN:
             path = tf.data.Dataset\
-                .from_tensor_slices([img.path for img in self.dataset.anno.images])
+                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
 
-            ann_ids = [self.padding_ann_ids(coco.getAnnIds(img.id, self.active_class_ids)) 
-                       for img in self.dataset.anno.images]
+            ann_ids = [self.padding_ann_ids(coco.getAnnIds(img['id'], self.active_class_ids)) 
+                       for img in coco.dataset['images']]
             ann_ids = tf.data.Dataset.from_tensor_slices(ann_ids)
 
             self.data_loader = tf.data.Dataset\
@@ -64,6 +67,10 @@ class DataLoader:
             self.data_loader = tf.data.Dataset\
                 .zip((self.data_loader, active_class_id_dataset))\
                 .map(lambda datas, active_class_id: [*datas, active_class_id],
+                     num_parallel_calls=tf.data.AUTOTUNE)\
+                .shuffle(self.shuffle_buffer_size)\
+                .batch(self.batch_size)\
+                .map(lambda *datas: [datas],
                      num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
 
@@ -88,18 +95,24 @@ class DataLoader:
             self.data_loader = tf.data.Dataset\
                 .from_tensor_slices(pathes)\
                 .map(self.preprocessing_predict, num_parallel_calls=tf.data.AUTOTUNE)\
+                .batch(self.batch_size)\
+                .map(lambda *datas: [datas],
+                     num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
         
         else:
             pathes = tf.data.Dataset\
-                .from_tensor_slices([img.path for img in self.dataset.anno.images])
+                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
             img_ids = tf.data.Dataset\
-                .from_tensor_slices([img.id for img in self.dataset.anno.images])
+                .from_tensor_slices([img['id'] for img in coco.dataset['images']])
 
 
             self.data_loader = tf.data.Dataset\
                 .zip((pathes,img_ids))\
                 .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
+                .batch(self.batch_size)\
+                .map(lambda *datas: [datas],
+                     num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
 
 
@@ -133,12 +146,17 @@ class DataLoader:
         ann_ids = [ann_id for ann_id in ann_ids if ann_id!=0]
         anns = self.dataset.coco.loadAnns(ann_ids)
 
-        boxes, masks, dataloader_class_ids = \
-            list(zip(*[gt for gt in [self.load_ann(ann, (h,w)) for ann in anns] if gt is not None]))
-        
-        boxes = tf.cast(tf.stack(boxes), tf.float32)
-        masks = tf.cast(tf.stack(masks), tf.bool)
-        dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int32)
+        gts = [gt for gt in [self.load_ann(ann, (h,w)) for ann in anns] if gt is not None]
+        if gts:
+            boxes, masks, dataloader_class_ids = list(zip(*gts))
+            
+            boxes = tf.cast(tf.stack(boxes), tf.float32)
+            masks = tf.cast(tf.stack(masks), tf.bool)
+            dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int64)
+        else:
+            boxes = tf.zeros([0,4], dtype=tf.float32)
+            masks = tf.zeros([0,h,w], dtype=tf.bool)
+            dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
         return boxes, masks, dataloader_class_ids
 
     @tf.function
@@ -147,20 +165,20 @@ class DataLoader:
 
         image = self.load_image(path)
         boxes, masks, dataloader_class_ids =\
-            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int32))
-
+            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
+    
         resized_image, resized_boxes, minimize_masks, window = \
             self.resize(image, boxes, masks)
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
-        
-        if self.augmentation is not None:
+
+        if self.augmentations is not None:
             resized_image, resized_boxes, minimize_masks = \
                 self.augment(resized_image, resized_boxes, minimize_masks)
         
         pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
         pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
-        pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int32)
+        pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
 
         instance_count = tf.shape(boxes)[0]
         if instance_count>self.config.MAX_GT_INSTANCES:
@@ -174,14 +192,16 @@ class DataLoader:
         minimize_masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
         dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
-        return resized_image, resized_boxes, minimize_masks, window, dataloader_class_ids,rpn_match, rpn_bbox
+        minimize_masks = tf.transpose(minimize_masks, [1,2,0])
+
+        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
 
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int32)])
+    @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int64)])
     def padding_ann_ids(self, ann_ids):
         def f(ann_ids):
             shape = ann_ids[0].shape
-            padded_ann_ids = tf.zeros([self.config.MAX_GT_INSTANCES, *shape], dtype=tf.int32)
+            padded_ann_ids = tf.zeros([self.config.MAX_GT_INSTANCES, *shape], dtype=tf.int64)
             indices = tf.expand_dims(tf.range(tf.shape(ann_ids)[0]),1)
             ann_ids = tf.tensor_scatter_nd_update(padded_ann_ids, indices, tf.gather(ann_ids, tf.range(tf.shape(ann_ids)[0])))
             return ann_ids
@@ -312,6 +332,7 @@ class DataLoader:
         def _augment(image,bbox,mask):
             image = image.numpy()
             bbox = bbox.numpy()
+            mask = mask.numpy()
             shape = image.shape[:2]
 
             augmentor = self.augmentations.to_deterministic()
@@ -320,7 +341,9 @@ class DataLoader:
             image = augmentor.augment_image(image)
 
             mask = mask.astype(np.uint8)
-            mask = augmentor.augment_image(mask).astype(bool)
+            mask = np.transpose(mask, [2,0,1])
+            mask = augmentor.augment_images(mask).astype(bool)
+            mask = np.transpose(mask, [1,2,0])
 
             bbox = bbox[:,[1,0,3,2]]
             bbi = BoundingBoxesOnImage.from_xyxy_array(bbox, shape)
@@ -346,17 +369,18 @@ class DataLoader:
             m, b = arg
             m = tf.ensure_shape(m, [None,None])
             m = tf.cast(m,tf.bool)
-            y1 = tf.cast(tf.round(b[0]), tf.int32)
-            x1 = tf.cast(tf.round(b[1]), tf.int32)
-            y2 = tf.cast(tf.round(b[2]), tf.int32)
-            x2 = tf.cast(tf.round(b[3]), tf.int32)
-            # h,w = tf.meshgrid(tf.range(y1,y2), tf.range(x1,x2))
-            # indice = tf.stack([h,w], axis=-1)
-            # m = tf.gather_nd(m, indice)
+            y1 = tf.cast(tf.round(b[0]), tf.int64)
+            x1 = tf.cast(tf.round(b[1]), tf.int64)
+            y2 = tf.cast(tf.round(b[2]), tf.int64)
+            x2 = tf.cast(tf.round(b[3]), tf.int64)
+
             m = m[y1:y2, x1:x2]
-            tf.cond(tf.size(m) == 0,
-                    lambda: tf.print("Invalid bounding box with area of zero"),
-                    lambda: tf.print())
+            if tf.size(m) == 0:
+                tf.errors.INVALID_ARGUMENT
+            # tf.cond(tf.size(m) == 0,
+            #         lambda: tf.print("Invalid bounding box with area of zero"),
+            #         lambda: None)
+
             # Resize with bilinear interpolation
             m = tf.expand_dims(m,2)
             m = tf.cast(m, tf.uint8)
@@ -415,9 +439,13 @@ class DataLoader:
         rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
         """
         # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
-        rpn_match = tf.zeros([tf.shape(self.anchors)[0]], dtype=tf.int32)
+        rpn_match = tf.zeros([tf.shape(self.anchors)[0]], dtype=tf.int64)
         # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
         rpn_bbox = tf.TensorArray(tf.float32, size=self.config.RPN_TRAIN_ANCHORS_PER_IMAGE)
+
+        if tf.shape(gt_boxes)[0] == 0:
+            rpn_bbox = tf.zeros([self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32)
+            return rpn_match, rpn_bbox
 
         # Handle COCO crowds
         # A crowd box in COCO is a bounding box around several instances. Exclude
@@ -455,13 +483,13 @@ class DataLoader:
         anchor_iou_argmax = tf.cast(tf.argmax(overlaps, axis=1), tf.int32)
         indices = tf.transpose([tf.range(tf.shape(overlaps)[0]), anchor_iou_argmax])
         anchor_iou_max = tf.gather_nd(overlaps,indices)
-        rpn_match = tf.where((anchor_iou_max < 0.3) & (no_crowd_bool), -1, rpn_match)
+        rpn_match = tf.where((anchor_iou_max < 0.3) & (no_crowd_bool), tf.cast(-1, tf.int64), rpn_match)
         # 2. Set an anchor for each GT box (regardless of IoU value).
         # If multiple anchors have the same IoU match all of them
-        rpn_match = tf.where(tf.reduce_any(overlaps == tf.reduce_max(overlaps, axis=0), axis=1), 1, rpn_match)
+        rpn_match = tf.where(tf.reduce_any(overlaps == tf.reduce_max(overlaps, axis=0), axis=1), tf.cast(1,tf.int64), rpn_match)
 
         # 3. Set anchors with high overlap as positive.
-        rpn_match = tf.where(anchor_iou_max >= 0.7, 1, rpn_match) 
+        rpn_match = tf.where(anchor_iou_max >= 0.7, tf.cast(1,tf.int64), rpn_match) 
 
         # Subsample to balance positive and negative anchors
         # Don't let positives be more than half the anchors
@@ -472,18 +500,18 @@ class DataLoader:
             ids = tf.random.shuffle(ids)[:extra]
             rpn_match = tf.tensor_scatter_nd_update(rpn_match, 
                                                     tf.expand_dims(ids,1),
-                                                    tf.repeat(0,tf.shape(ids)[0]))
+                                                    tf.repeat(tf.cast(0,tf.int64),tf.shape(ids)[0]))
 
         # Same for negative proposals
         ids = tf.where(rpn_match == -1)[...,0]
-        extra = tf.shape(ids)[0] - (self.config.RPN_TRAIN_ANCHORS_PER_IMAGE -
-                            tf.reduce_sum(tf.cast(rpn_match == 1, tf.int32)))
+        extra = tf.cast(tf.shape(ids)[0],tf.int64) - (self.config.RPN_TRAIN_ANCHORS_PER_IMAGE -
+                            tf.reduce_sum(tf.cast(rpn_match == 1, tf.int64)))
         if extra > 0:
             # Rest the extra ones to neutral
             ids = tf.random.shuffle(ids)[:extra]
             rpn_match = tf.tensor_scatter_nd_update(rpn_match, 
                                                     tf.expand_dims(ids,1),
-                                                    tf.repeat(0,tf.shape(ids)[0]))
+                                                    tf.repeat(tf.cast(0,tf.int64),tf.shape(ids)[0]))
 
         # For positive anchors, compute shift and scale needed to transform them
         # to match the corresponding GT boxes.

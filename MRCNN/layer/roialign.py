@@ -1,11 +1,58 @@
 import numpy as np
 import tensorflow as tf
 import keras.api._v2.keras.layers as KL
+
+from MRCNN.config import Config
 from ..model_utils.data_formatting import parse_image_meta_graph
 
+@tf.function
 def log2_graph(x):
     """Implementation of Log2. TF doesn't have a native implementation."""
     return tf.math.log(x) / tf.math.log(2.0)
+
+
+@tf.function
+def pool_feature_maps(feature_maps, roi_level, boxes, pool_shape):
+    # Loop through levels and apply ROI pooling to each. P2 to P5.
+    pooled = tf.TensorArray(tf.float32, size=len(feature_maps))
+    box_to_level = tf.TensorArray(tf.int32, size=len(feature_maps))
+    i = 0
+    for feature in feature_maps:
+    # for i, level in enumerate(range(2, 2+len(feature_maps))):
+        ix = tf.where(tf.equal(roi_level, i+2))
+        level_boxes = tf.gather_nd(boxes, ix)
+
+        # Box indices for crop_and_resize.
+        box_indices = tf.cast(ix[:, 0], tf.int32)
+
+        # Keep track of which box is mapped to which level
+        box_to_level.write(i, tf.cast(ix, tf.int32))
+
+        # Stop gradient propogation to ROI proposals
+        level_boxes = tf.stop_gradient(level_boxes)
+        box_indices = tf.stop_gradient(box_indices)
+
+        # Crop and Resize
+        # From Mask R-CNN paper: "We sample four regular locations, so
+        # that we can evaluate either max or average pooling. In fact,
+        # interpolating only a single value at each bin center (without
+        # pooling) is nearly as effective."
+        #
+        # Here we use the simplified approach of a single value per bin,
+        # which is how it's done in tf.crop_and_resize()
+        # Result: [batch * num_boxes, pool_height, pool_width, channels]
+        pooled.write(
+            i,
+            tf.image.crop_and_resize(**{'image':feature, 'boxes':level_boxes, 'box_indices':box_indices, 'crop_size':pool_shape, 'method':"bilinear"}))
+        i+=1
+
+    # Pack pooled features into one tensor
+    pooled = pooled.concat()
+
+    # Pack box_to_level mapping into one array and add another
+    # column representing the order of pooled boxes
+    box_to_level = box_to_level.concat()
+    return pooled, box_to_level
 
 
 class PyramidROIAlign(KL.Layer):
@@ -28,9 +75,10 @@ class PyramidROIAlign(KL.Layer):
     constructor.
     """
 
-    def __init__(self, pool_shape, **kwargs):
+    def __init__(self, pool_shape, config:Config, **kwargs):
         super(PyramidROIAlign, self).__init__(**kwargs)
         self.pool_shape = tuple(pool_shape)
+        self.config = config
 
     def call(self, 
              boxes, # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
@@ -47,46 +95,12 @@ class PyramidROIAlign(KL.Layer):
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
         roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
-        roi_level = tf.minimum(2, tf.maximum(
-            2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
+        roi_level = tf.minimum(tf.cast(2,tf.int64), tf.maximum(
+            tf.cast(2, tf.int64), tf.cast(4, tf.int64) + tf.cast(tf.round(roi_level), tf.int64)))
         roi_level = tf.squeeze(roi_level, 2)
 
-        # Loop through levels and apply ROI pooling to each. P2 to P5.
-        pooled = []
-        box_to_level = []
-        for i, level in enumerate(range(2, 2+len(feature_maps))):
-            ix = tf.where(tf.equal(roi_level, level))
-            level_boxes = tf.gather_nd(boxes, ix)
+        pooled, box_to_level = pool_feature_maps(feature_maps, roi_level, boxes, self.pool_shape)
 
-            # Box indices for crop_and_resize.
-            box_indices = tf.cast(ix[:, 0], tf.int32)
-
-            # Keep track of which box is mapped to which level
-            box_to_level.append(ix)
-
-            # Stop gradient propogation to ROI proposals
-            level_boxes = tf.stop_gradient(level_boxes)
-            box_indices = tf.stop_gradient(box_indices)
-
-            # Crop and Resize
-            # From Mask R-CNN paper: "We sample four regular locations, so
-            # that we can evaluate either max or average pooling. In fact,
-            # interpolating only a single value at each bin center (without
-            # pooling) is nearly as effective."
-            #
-            # Here we use the simplified approach of a single value per bin,
-            # which is how it's done in tf.crop_and_resize()
-            # Result: [batch * num_boxes, pool_height, pool_width, channels]
-            pooled.append(tf.image.crop_and_resize(
-                feature_maps[i], level_boxes, box_indices, self.pool_shape,
-                method="bilinear"))
-
-        # Pack pooled features into one tensor
-        pooled = tf.concat(pooled, axis=0)
-
-        # Pack box_to_level mapping into one array and add another
-        # column representing the order of pooled boxes
-        box_to_level = tf.concat(box_to_level, axis=0)
         box_range = tf.expand_dims(tf.range(tf.shape(box_to_level)[0]), 1)
         box_to_level = tf.concat([tf.cast(box_to_level, tf.int32), box_range],
                                  axis=1)
@@ -102,6 +116,7 @@ class PyramidROIAlign(KL.Layer):
         # Re-add the batch dimension
         shape = tf.concat([tf.shape(boxes)[:2], tf.shape(pooled)[1:]], axis=0)
         pooled = tf.reshape(pooled, shape)
+        pooled = tf.ensure_shape(pooled, [None, None, self.pool_shape[0], self.pool_shape[1], self.config.TOP_DOWN_PYRAMID_SIZE])
         return pooled
 
     def compute_output_shape(self, input_shape):

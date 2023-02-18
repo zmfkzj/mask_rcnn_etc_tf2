@@ -1,3 +1,4 @@
+from enum import Enum
 import re
 
 import keras.api._v2.keras as keras
@@ -5,23 +6,26 @@ import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
 import numpy as np
 import tensorflow as tf
-import tensorflow_addons as tfa
 import tensorflow_models as tfm
-from official.vision.ops.iou_similarity import iou
-from pycocotools.coco import COCO
 
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.layer.roialign import parse_image_meta_graph
 from MRCNN.metric import CocoMetric
 from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 
-from ..layer import (DetectionLayer, DetectionTargetLayer, ProposalLayer,
-                     PyramidROIAlign)
+from ..layer import (DetectionLayer, DetectionTargetLayer, ProposalLayer)
 from ..model_utils.miscellenous_graph import NormBoxesGraph
 from ..utils import compute_backbone_shapes
 from . import RPN, FPN_classifier, FPN_mask, Neck
+
+
+class TrainLayers(Enum):
+    META = r"(meta\_.*)"
+    # all layers but the backbone
+    HEADS = r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(meta\_.*)"
+    # All layers
+    ALL = ".*"
 
 
 class MaskRcnn(KM.Model):
@@ -44,14 +48,13 @@ class MaskRcnn(KM.Model):
             gpus = [config.GPUS]
         else:
             gpus = config.GPUS
-        self.strategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus], cross_device_ops=config.CROSS_DEVICE_OPS)
+        self.strategy = self.config.STRATEGY
 
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
-
 
         #parts
         self.meta_conv1 = KL.Conv2D(64,(7,7),strides=(2,2),name='meta_conv1', use_bias=True)
@@ -62,14 +65,24 @@ class MaskRcnn(KM.Model):
 
         self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_SCALES)*len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
-        self.ROIAlign_classifier = PyramidROIAlign([config.POOL_SIZE, config.POOL_SIZE], name="roi_align_classifier")
-        self.ROIAlign_mask = PyramidROIAlign([config.MASK_POOL_SIZE, config.MASK_POOL_SIZE], name="roi_align_mask")
+        # self.ROIAlign_classifier = PyramidROIAlign([config.POOL_SIZE, config.POOL_SIZE], self.config, name="roi_align_classifier")
+        # self.ROIAlign_mask = PyramidROIAlign([config.MASK_POOL_SIZE, config.MASK_POOL_SIZE], self.config, name="roi_align_mask")
+
+        self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
+        self.ROIAlign_mask = tfm.vision.layers.MultilevelROIAligner(config.MASK_POOL_SIZE, name="roi_align_mask")
 
         self.fpn_classifier = FPN_classifier(self.config.POOL_SIZE, self.config.NUM_CLASSES, fc_layers_size=self.config.FPN_CLASSIF_FC_LAYERS_SIZE)
         self.fpn_mask = FPN_mask(self.config.NUM_CLASSES)
 
         self.concats = [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]]
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
+
+        #losses
+        self.rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")
+        self.rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")
+        self.class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")
+        self.bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")
+        self.mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")
 
         #excuting models
         self.predict_model = self.make_predict_model()
@@ -83,16 +96,24 @@ class MaskRcnn(KM.Model):
     
 
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, pathes = data
-        detections, mrcnn_mask = self.predict_model(input_images, input_window, training=False)
+        input_images, input_window, origin_image_shapes, pathes = data[0]
+        detections, mrcnn_mask = self.predict_model([input_images, input_window])
+
+        # detections, mrcnn_mask = self.strategy.run(self.predict_model, args=([input_images, input_window],))
+        # detections = self.strategy.gather(detections,axis=0)
+        # mrcnn_mask = self.strategy.gather(mrcnn_mask,axis=0)
 
         return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
             
 
 
     def test_step(self, data):
-        input_images, input_window, origin_image_shapes, image_ids = data
-        detections, mrcnn_mask = self.test_model(input_images, input_window, training=False)
+        input_images, input_window, origin_image_shapes, image_ids = data[0]
+        detections, mrcnn_mask = self.test_model([input_images, input_window])
+
+        # detections, mrcnn_mask = self.strategy.run(self.test_model, args=([input_images, input_window],))
+        # detections = self.strategy.gather(detections,axis=0)
+        # mrcnn_mask = self.strategy.gather(mrcnn_mask,axis=0)
 
         self.coco_metric.update_state(image_ids, detections, origin_image_shapes, input_window, mrcnn_mask)
         results = self.coco_metric.result()
@@ -101,11 +122,21 @@ class MaskRcnn(KM.Model):
 
 
     def train_step(self, data):
-        with tf.GradientTape() as tape:
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = self.train_model(*data, training=True)
-        gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+        def step_fn(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids):
+            with tf.GradientTape() as tape:
+                rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
+                    self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
+            gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+            return rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss
+        
+        resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+        rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
+            step_fn(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids)
 
+        # losses = self.strategy.run(step_fn, args=(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids))
+        # mean_losses = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
+        # rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = mean_losses
         reg_losses = self.train_model.losses[0]
 
         return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses}
@@ -119,7 +150,7 @@ class MaskRcnn(KM.Model):
         
 
         rpn_feature_maps = [P3, P4, P5, P6]
-        mrcnn_feature_maps = [P3, P4, P5]
+        mrcnn_feature_maps = {'2':P3, '3':P4, '4':P5}
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -142,7 +173,8 @@ class MaskRcnn(KM.Model):
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         
-        roi_cls_feature = self.ROIAlign_classifier(rpn_rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        # roi_cls_feature = self.ROIAlign_classifier(rpn_rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, rpn_rois)
 
         # Network Heads
         # Proposal classifier and BBox regressor heads
@@ -151,7 +183,8 @@ class MaskRcnn(KM.Model):
 
         # Create masks for detections
         detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
-        roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        # roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        roi_seg_feature = self.ROIAlign_mask(mrcnn_feature_maps, detection_boxes)
         mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
 
         model = keras.Model([input_image, input_window],
@@ -168,12 +201,12 @@ class MaskRcnn(KM.Model):
         input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="input_image")
         active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="input_class_ids")
         # RPN GT
-        input_rpn_match = KL.Input( shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
+        input_rpn_match = KL.Input( shape=[None, 1], name="input_rpn_match", dtype=tf.int64)
         input_rpn_bbox = KL.Input( shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
 
         # Detection GT (class IDs, bounding boxes, and masks)
         # 1. GT Class IDs (zero padded)
-        input_gt_class_ids = KL.Input( shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+        input_gt_class_ids = KL.Input( shape=[None], name="input_gt_class_ids", dtype=tf.int64)
         # 2. GT Boxes in pixels (zero padded)
         # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
         input_gt_boxes = KL.Input( shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
@@ -188,7 +221,8 @@ class MaskRcnn(KM.Model):
         
 
         rpn_feature_maps = [P3, P4, P5, P6]
-        mrcnn_feature_maps = [P3, P4, P5]
+        # mrcnn_feature_maps = [P3, P4, P5]
+        mrcnn_feature_maps = {'2':P3, '3':P4, '4':P5}
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -219,20 +253,23 @@ class MaskRcnn(KM.Model):
         rois, target_class_ids, target_bbox, target_mask =\
             DetectionTargetLayer(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
         
-        roi_cls_features = self.ROIAlign_classifier(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        roi_mask_features = self.ROIAlign_mask(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        # roi_cls_features = self.ROIAlign_classifier(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        # roi_mask_features = self.ROIAlign_mask(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
+        roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, rois)
+        roi_mask_features = self.ROIAlign_mask(mrcnn_feature_maps, rois)
 
         # Network Heads
         # TODO: verify that this handles zero padded ROIs
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_features)
         mrcnn_mask = self.fpn_mask(roi_mask_features)
 
+
         # Losses
-        rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits)
-        rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
-        class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
-        bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
-        mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask)
+        rpn_class_loss = self.rpn_class_loss( input_rpn_match, rpn_class_logits)
+        rpn_bbox_loss = self.rpn_bbox_loss(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+        class_loss = self.class_loss(target_class_ids, mrcnn_class_logits, active_class_ids)
+        bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox)
+        mask_loss = self.mask_loss(target_mask, target_class_ids, mrcnn_mask)
 
         # Model
         inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
@@ -245,7 +282,6 @@ class MaskRcnn(KM.Model):
         model.add_loss(lambda: tf.add_n(reg_losses))
         model.add_loss(outputs)
         return model
-
 
 
     def make_backbone_model(self):
@@ -273,10 +309,13 @@ class MaskRcnn(KM.Model):
         return model
         
 
-    def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
+    def set_trainable(self, train_layers:TrainLayers, keras_model=None, indent=0, verbose=1):
         """Sets model layers as trainable if their names match
         the given regular expression.
         """
+        # Pre-defined layer regular expressions
+        layer_regex = train_layers.value
+
         # Print message on the first call (but not on recursive calls)
         if verbose > 0 and keras_model is None:
             print("Selecting layers to train")
@@ -291,8 +330,7 @@ class MaskRcnn(KM.Model):
             # Is the layer a model?
             if isinstance(layer, KM.Model):
                 print("In model: ", layer.name)
-                self.set_trainable(
-                    layer_regex, keras_model=layer, indent=indent + 4)
+                self.set_trainable(train_layers, keras_model=layer, indent=indent + 4)
                 continue
 
             if not layer.weights:
@@ -308,6 +346,7 @@ class MaskRcnn(KM.Model):
             if trainable and verbose > 0:
                 print("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
+
 
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
@@ -332,6 +371,7 @@ class MaskRcnn(KM.Model):
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
     
+
     def load_weights(self, filepath):
         import h5py
 

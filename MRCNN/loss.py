@@ -10,6 +10,7 @@ class SmoothL1Loss(KL.Layer):
         """Implements Smooth-L1 loss.
         y_true and y_pred are typically: [N, 4], but could be any shape.
         """
+
         diff = tf.abs(tf.cast(y_true,tf.float32) - y_pred)
         less_than_one = tf.cast(tf.less(diff, 1.0), "float32")
         loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
@@ -27,7 +28,7 @@ class RpnClassLossGraph(KL.Layer):
         # Squeeze last dim to simplify
         rpn_match = tf.squeeze(rpn_match, -1)
         # Get anchor classes. Convert the -1/+1 match to 0/1 values.
-        anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int32)
+        anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int64)
         # Positive and Negative anchors contribute to the loss,
         # but neutral anchors (match value = 0) don't.
         indices = tf.where(tf.not_equal(rpn_match, 0))
@@ -41,6 +42,12 @@ class RpnClassLossGraph(KL.Layer):
 
 
 class RpnBboxLossGraph(KL.Layer):
+    def __init__(self, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
+        super().__init__(trainable, name, dtype, dynamic, **kwargs)
+        self.batch_pack = BatchPackGraph()
+        self.smooth_l1 = SmoothL1Loss()
+
+
     def call(self, target_bbox, rpn_match, rpn_bbox, batch_size):
         """Return the RPN bounding box loss graph.
 
@@ -60,10 +67,10 @@ class RpnBboxLossGraph(KL.Layer):
         rpn_bbox = tf.gather_nd(rpn_bbox, indices)
 
         # Trim target bounding box deltas to the same length as rpn_bbox.
-        batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int32), axis=1)
-        target_bbox = BatchPackGraph()(target_bbox, batch_counts, batch_size)
+        batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int64), axis=1)
+        target_bbox = self.batch_pack(target_bbox, batch_counts, batch_size)
 
-        loss = SmoothL1Loss()(target_bbox, rpn_bbox)
+        loss = self.smooth_l1(target_bbox, rpn_bbox)
         
         loss = tf.where(tf.size(loss) > 0, tf.reduce_mean(loss), tf.constant(0.0))
         return loss
