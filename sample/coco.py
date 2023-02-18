@@ -19,8 +19,8 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.001
-    IMAGES_PER_GPU = 2
+    LEARNING_RATE = 0.0001
+    IMAGES_PER_GPU = 9
     STEPS_PER_EPOCH = 3000
     VALIDATION_STEPS = 200
     
@@ -65,20 +65,20 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}',monitor='mAP50',save_
              keras.callbacks.EarlyStopping('mAP50')]
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
     model = MaskRcnn(config,train_dataset)
 
     model.set_trainable(TrainLayers.HEADS)
     model.compile(val_metric,optimizer=optimizer)
 
-model.fit(iter(train_loader), epochs=2,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
+model.fit(iter(train_loader), epochs=100,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
 
 
 with config.STRATEGY.scope():
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_metric,optimizer=optimizer)
 
-model.fit(iter(train_loader), epochs=2,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
+model.fit(iter(train_loader), epochs=300,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
 
 model.evaluate(iter(val_loader))

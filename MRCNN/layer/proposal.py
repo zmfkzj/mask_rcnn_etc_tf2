@@ -110,7 +110,7 @@ class ProposalLayer(KL.Layer):
             padding = tf.maximum(proposal_count - tf.shape(proposals)[0], 0)
             proposals = tf.pad(proposals, [(0, padding), (0, 0)])
             return proposals
-        proposals = tf.vectorized_map(nms,[boxes, scores])
+        proposals = tf.map_fn(nms,(boxes, scores),tf.float32)
         
         return proposals
 

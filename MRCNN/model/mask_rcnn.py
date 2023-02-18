@@ -134,12 +134,9 @@ class MaskRcnn(KM.Model):
         rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
             step_fn(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids)
 
-        # losses = self.strategy.run(step_fn, args=(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids))
-        # mean_losses = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
-        # rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = mean_losses
         reg_losses = self.train_model.losses[0]
 
-        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses}
+        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
     def make_predict_model(self):
         input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='input_image')
