@@ -57,14 +57,8 @@ class DataLoader:
 
             self.data_loader = tf.data.Dataset\
                 .zip((path, ann_ids))\
-                .map(lambda path, ann_ids: self.preproccessing_train_data_load(path, ann_ids), 
+                .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
                      num_parallel_calls=tf.data.AUTOTUNE)\
-                .cache()\
-                .map(lambda *datas: self.preproccessing_train_augment(*datas), 
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .map(lambda *datas: self.preproccessing_train_padding(*datas), 
-                     num_parallel_calls=tf.data.AUTOTUNE)
-
 
             active_class_id_dataset = tf.data.Dataset\
                 .from_tensors(self.active_class_ids)\
@@ -165,40 +159,40 @@ class DataLoader:
             dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
         return boxes, masks, dataloader_class_ids
 
-    # @tf.function
-    # def preproccessing_train(self, path, ann_ids):
-    #     image = self.load_image(path)
-    #     boxes, masks, dataloader_class_ids =\
-    #         tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
+    @tf.function
+    def preproccessing_train(self, path, ann_ids):
+        image = self.load_image(path)
+        boxes, masks, dataloader_class_ids =\
+            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
     
-    #     resized_image, resized_boxes, minimize_masks, window = \
-    #         self.resize(image, boxes, masks)
-    #     rpn_match, rpn_bbox = \
-    #         self.build_rpn_targets(dataloader_class_ids, resized_boxes)
+        resized_image, resized_boxes, minimize_masks, window = \
+            self.resize(image, boxes, masks)
+        rpn_match, rpn_bbox = \
+            self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
-    #     if self.augmentations is not None:
-    #         resized_image, resized_boxes, minimize_masks = \
-    #             self.augment(resized_image, resized_boxes, minimize_masks)
+        if self.augmentations is not None:
+            resized_image, resized_boxes, minimize_masks = \
+                self.augment(resized_image, resized_boxes, minimize_masks)
         
-    #     pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
-    #     pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
-    #     pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
+        pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
+        pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
+        pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
 
-    #     instance_count = tf.shape(boxes)[0]
-    #     if instance_count>self.config.MAX_GT_INSTANCES:
-    #         indices = tf.random.shuffle(tf.range(instance_count))[:self.config.MAX_GT_INSTANCES]
-    #         indices = tf.expand_dims(indices,1)
-    #     else:
-    #         indices = tf.range(instance_count)
-    #         indices = tf.expand_dims(indices,1)
+        instance_count = tf.shape(boxes)[0]
+        if instance_count>self.config.MAX_GT_INSTANCES:
+            indices = tf.random.shuffle(tf.range(instance_count))[:self.config.MAX_GT_INSTANCES]
+            indices = tf.expand_dims(indices,1)
+        else:
+            indices = tf.range(instance_count)
+            indices = tf.expand_dims(indices,1)
 
-    #     resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(boxes, tf.squeeze(indices,-1)))
-    #     minimize_masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
-    #     dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
+        resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(boxes, tf.squeeze(indices,-1)))
+        minimize_masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
+        dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
-    #     minimize_masks = tf.transpose(minimize_masks, [1,2,0])
+        minimize_masks = tf.transpose(minimize_masks, [1,2,0])
 
-    #     return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
+        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
 
     @tf.function
     def preproccessing_train_data_load(self, path, ann_ids):

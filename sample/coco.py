@@ -20,7 +20,7 @@ class TrainConfig(Config):
     # GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.0001
-    IMAGES_PER_GPU = 9
+    IMAGES_PER_GPU = 8
     STEPS_PER_EPOCH = 3000
     VALIDATION_STEPS = 200
     
@@ -50,10 +50,10 @@ augmentations = iaa.Sequential([
 ])
 
 now = datetime.datetime.now().isoformat()
-train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
-                    '/home/tmdocker/host/dataset/coco/train2017/')
-val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
-                    '/home/tmdocker/host/dataset/coco/val2017/')
+train_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json', 
+                    '/home/tmdocker/host/dataset/coco/coco/train2017/')
+val_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json', 
+                    '/home/tmdocker/host/dataset/coco/coco/val2017/')
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
