@@ -28,6 +28,9 @@ class Dataset:
 
     def __hash__(self) -> int:
         return hash((self.json_path, self.image_path))
+    
+    def __len__(self):
+        return len(self.coco.dataset['images'])
 
 
 

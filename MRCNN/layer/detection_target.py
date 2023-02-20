@@ -223,7 +223,11 @@ class DetectionTargetLayer(KL.Layer):
         # TODO: Rename target_bbox to target_deltas for clarity
         outputs = tf.map_fn(lambda t: self.detection_targets_graph(*t),
                             (proposals, gt_class_ids, gt_boxes, gt_masks),
-                            (tf.float32, tf.int64, tf.float32, tf.float32))
+                            fn_output_signature=(tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE],dtype=tf.int64), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,*self.config.MASK_SHAPE],dtype=tf.float32)))
+
         return outputs
 
     def compute_output_shape(self, input_shape):

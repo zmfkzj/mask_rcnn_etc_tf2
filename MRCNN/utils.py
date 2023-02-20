@@ -138,8 +138,8 @@ def denorm_boxes(boxes, shape):
     """
     h = shape[0]
     w = shape[1]
-    scale = tf.stack([h - 1, w - 1, h - 1, w - 1])
-    shift = tf.stack([0, 0, 1, 1])
+    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.float32)
+    shift = tf.stack([0., 0., 1., 1.])
     return tf.cast(tf.round(tf.multiply(boxes, scale) + shift),tf.int64)
 
 

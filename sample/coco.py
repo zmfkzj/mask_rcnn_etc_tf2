@@ -50,10 +50,10 @@ augmentations = iaa.Sequential([
 ])
 
 now = datetime.datetime.now().isoformat()
-train_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json', 
-                    '/home/tmdocker/host/dataset/coco/coco/train2017/')
-val_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json', 
-                    '/home/tmdocker/host/dataset/coco/coco/val2017/')
+train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
+                    '/home/tmdocker/host/dataset/coco/train2017/')
+val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
+                    '/home/tmdocker/host/dataset/coco/val2017/')
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 

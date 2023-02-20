@@ -32,7 +32,9 @@ class DetectionLayer(KL.Layer):
         window = NormBoxesGraph()(window, image_shape[:2])
 
         # Run detection refinement graph on each item in the batch
-        detections_batch = tf.vectorized_map(lambda x: self.refine_detections_graph(*x),[rois, mrcnn_class, mrcnn_bbox, window])
+        detections_batch = tf.map_fn(lambda x: self.refine_detections_graph(*x),
+                                     (rois, mrcnn_class, mrcnn_bbox, window),
+                                     fn_output_signature=tf.TensorSpec(shape=[None,6], dtype=tf.float32))
 
         # Reshape output
         # [batch, num_detections, (y1, x1, y2, x2, class_id, class_score)] in
@@ -107,7 +109,9 @@ class DetectionLayer(KL.Layer):
             return class_keep
 
         # 2. Map over class IDs
-        nms_keep = tf.vectorized_map(nms_keep_map, unique_pre_nms_class_ids)
+        nms_keep = tf.map_fn(nms_keep_map, 
+                             unique_pre_nms_class_ids,
+                             fn_output_signature=tf.TensorSpec(shape=[100],dtype=tf.int64))
         # 3. Merge results into one list, and remove -1 padding
         nms_keep = tf.reshape(nms_keep, [-1])
         nms_keep = tf.gather(nms_keep, tf.where(nms_keep > -1)[:, 0])

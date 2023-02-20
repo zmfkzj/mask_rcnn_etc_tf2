@@ -26,9 +26,9 @@ class Mode(Enum):
 @dataclass
 class DataLoader:
     config:Config
-    active_class_ids:list[int]
     mode:Mode
     batch_size:int
+    active_class_ids:Optional[list[int]] = None
     dataset:Optional[Dataset] = None
     image_pathes:Optional[Union[str,list[str]]] = None
     data_loader:Optional[tf.data.Dataset] = None
@@ -121,7 +121,7 @@ class DataLoader:
     
 
     def __hash__(self) -> int:
-        return hash((tuple(self.active_class_ids), 
+        return hash((tuple(self.active_class_ids) if self.active_class_ids is not None else None, 
                      self.mode, 
                      tuple(self.image_pathes) if self.image_pathes is not None else None, 
                      self.dataset))
@@ -267,7 +267,6 @@ class DataLoader:
         image = image[:,:,:3]
         if tf.size(image) == 0:
             tf.print(f"image({path}) size is zero")
-            print(f"image({path}) size is zero")
         return image
     
 
@@ -423,9 +422,9 @@ class DataLoader:
             x2 = tf.cast(tf.round(b[3]), tf.int64)
 
             m = m[y1:y2, x1:x2]
-            if tf.size(m) == 0:
-                tf.print("mask size is zero")
-                tf.errors.INVALID_ARGUMENT
+            # if tf.size(m) == 0:
+            #     tf.print("mask size is zero")
+            #     tf.errors.INVALID_ARGUMENT
             # tf.cond(tf.size(m) == 0,
             #         lambda: tf.print("Invalid bounding box with area of zero"),
             #         lambda: None)

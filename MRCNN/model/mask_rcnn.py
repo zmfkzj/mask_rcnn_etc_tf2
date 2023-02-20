@@ -4,13 +4,13 @@ import re
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
+from keras.engine.training import _minimum_control_deps, reduce_per_replica
 import numpy as np
 import tensorflow as tf
 import tensorflow_models as tfm
 
 from MRCNN import utils
 from MRCNN.config import Config
-from MRCNN.data.dataset import Dataset
 from MRCNN.metric import CocoMetric
 from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 
@@ -34,7 +34,7 @@ class MaskRcnn(KM.Model):
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, config:Config, dataset:Dataset):
+    def __init__(self, config:Config):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -42,12 +42,6 @@ class MaskRcnn(KM.Model):
         """
         super().__init__(name='mask_rcnn')
         self.config = config
-        self.dataset = dataset
-
-        if isinstance(config.GPUS, int):
-            gpus = [config.GPUS]
-        else:
-            gpus = config.GPUS
         self.strategy = self.config.STRATEGY
 
         h, w = config.IMAGE_SHAPE[:2]
@@ -99,26 +93,17 @@ class MaskRcnn(KM.Model):
         input_images, input_window, origin_image_shapes, pathes = data[0]
         detections, mrcnn_mask = self.predict_model([input_images, input_window])
 
-        # detections, mrcnn_mask = self.strategy.run(self.predict_model, args=([input_images, input_window],))
-        # detections = self.strategy.gather(detections,axis=0)
-        # mrcnn_mask = self.strategy.gather(mrcnn_mask,axis=0)
-
         return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
-            
 
 
     def test_step(self, data):
         input_images, input_window, origin_image_shapes, image_ids = data[0]
         detections, mrcnn_mask = self.test_model([input_images, input_window])
-
-        # detections, mrcnn_mask = self.strategy.run(self.test_model, args=([input_images, input_window],))
-        # detections = self.strategy.gather(detections,axis=0)
-        # mrcnn_mask = self.strategy.gather(mrcnn_mask,axis=0)
-
         self.coco_metric.update_state(image_ids, detections, origin_image_shapes, input_window, mrcnn_mask)
         results = self.coco_metric.result()
-        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = tf.unstack(results)
+        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = tf.unstack(results,12)
         return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
+        return {}
 
 
     def train_step(self, data):
@@ -137,6 +122,95 @@ class MaskRcnn(KM.Model):
         reg_losses = self.train_model.losses[0]
 
         return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+
+
+    # def make_test_function(self, force=False):
+    #     if self.test_function is not None and not force:
+    #         return self.test_function
+
+    #     def step_function(model, iterator):
+    #         """Runs a single evaluation step."""
+
+    #         def run_step(data):
+    #             outputs = model.test_step(data)
+    #             # Ensure counter is updated only if `test_step` succeeds.
+    #             with tf.control_dependencies(_minimum_control_deps(outputs)):
+    #                 model._test_counter.assign_add(1)
+    #             return outputs
+
+    #         if self.jit_compile:
+    #             run_step = tf.function(
+    #                 run_step, jit_compile=True, reduce_retracing=True
+    #             )
+
+    #         data = next(iterator)
+    #         outputs = model.distribute_strategy.run(run_step, args=(data,))
+    #         outputs = reduce_per_replica(
+    #             outputs,
+    #             self.distribute_strategy,
+    #             reduction=self.distribute_reduction_method,
+    #         )
+    #         return outputs
+
+    #     # Special case if steps_per_execution is one.
+    #     if (
+    #         self._steps_per_execution is None
+    #         or self._steps_per_execution.numpy().item() == 1
+    #     ):
+
+    #         def test_function(iterator):
+    #             """Runs a test execution with a single step."""
+    #             return step_function(self, iterator)
+
+    #         if not self.run_eagerly:
+    #             test_function = tf.function(
+    #                 test_function, reduce_retracing=True
+    #             )
+
+    #         if self._cluster_coordinator:
+    #             self.test_function = (
+    #                 lambda it: self._cluster_coordinator.schedule(
+    #                     test_function, args=(it,)
+    #                 )
+    #             )
+    #         else:
+    #             self.test_function = test_function
+
+    #     # If we're using a coordinator, use the value of
+    #     # self._steps_per_execution at the time the function is
+    #     # called/scheduled, and not when it is actually executed.
+    #     elif self._cluster_coordinator:
+
+    #         def test_function(iterator, steps_per_execution):
+    #             """Runs a test execution with multiple steps."""
+    #             for _ in tf.range(steps_per_execution):
+    #                 outputs = step_function(self, iterator)
+    #             return outputs
+
+    #         if not self.run_eagerly:
+    #             test_function = tf.function(
+    #                 test_function, reduce_retracing=True
+    #             )
+
+    #         self.test_function = lambda it: self._cluster_coordinator.schedule(
+    #             test_function, args=(it, self._steps_per_execution.value())
+    #         )
+    #     else:
+
+    #         def test_function(iterator):
+    #             """Runs a test execution with multiple steps."""
+    #             for _ in tf.range(self._steps_per_execution):
+    #                 outputs = step_function(self, iterator)
+    #             return outputs
+
+    #         if not self.run_eagerly:
+    #             test_function = tf.function(
+    #                 test_function, reduce_retracing=True
+    #             )
+    #         self.test_function = test_function
+
+    #     return self.test_function
+    
 
     def make_predict_model(self):
         input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='input_image')
