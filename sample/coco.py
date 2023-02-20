@@ -16,10 +16,11 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.0001
-    IMAGES_PER_GPU = 8
-    STEPS_PER_EPOCH = 3000
-    VALIDATION_STEPS = 200
+    LEARNING_RATE = 0.0005
+    TRAIN_IMAGES_PER_GPU = 12
+    TEST_IMAGES_PER_GPU = 20
+    STEPS_PER_EPOCH = 100
+    VALIDATION_STEPS = 50
     
 
 config = TrainConfig()
@@ -36,7 +37,7 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
                 lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
                 lambda : super_lr)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 9000,0.95,1000, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 9000,0.95,500, staircase=True)
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -54,11 +55,11 @@ val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_va
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
-train_loader = DataLoader(config, Mode.TRAIN, config.BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}',monitor='mAP50',save_best_only=True, save_weights_only=True),
-             keras.callbacks.TensorBoard(log_dir=f'logs_{now}'),
+             keras.callbacks.TensorBoard(log_dir=f'logs_{now}',update_freq='s'),
              keras.callbacks.EarlyStopping('mAP50')]
 
 val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
@@ -70,13 +71,25 @@ with config.STRATEGY.scope():
     model.set_trainable(TrainLayers.HEADS)
     model.compile(val_metric,optimizer=optimizer)
 
-model.fit(iter(train_loader), epochs=100,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
+model.fit(iter(train_loader), 
+          epochs=100,
+          callbacks=callbacks,
+          validation_data=iter(val_loader), 
+          steps_per_epoch=config.STEPS_PER_EPOCH,
+          validation_steps=config.VALIDATION_STEPS,
+          validation_freq=10)
 
 
 with config.STRATEGY.scope():
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_metric,optimizer=optimizer)
 
-model.fit(iter(train_loader), epochs=300,callbacks=callbacks,validation_data=iter(val_loader), steps_per_epoch=config.STEPS_PER_EPOCH,validation_steps=config.VALIDATION_STEPS)
+model.fit(iter(train_loader), 
+          epochs=300,
+          callbacks=callbacks,
+          validation_data=iter(val_loader), 
+          steps_per_epoch=config.STEPS_PER_EPOCH,
+          validation_steps=config.VALIDATION_STEPS,
+          validation_freq=10)
 
 model.evaluate(iter(val_loader))

@@ -24,7 +24,8 @@ class Config(object):
     # handle 2 images of 1024x1024px.
     # Adjust based on your GPU memory and image sizes. Use the highest
     # number that your GPU can handle for best performance.
-    IMAGES_PER_GPU = 2
+    TRAIN_IMAGES_PER_GPU = 2
+    TEST_IMAGES_PER_GPU = 4
 
     # Number of training steps per epoch
     # This doesn't need to match the size of the training set. Tensorboard
@@ -220,8 +221,8 @@ class Config(object):
             self.GPU_COUNT = len(self.GPUS)
             gpus = self.GPUS
         self.STRATEGY = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus], cross_device_ops=self.CROSS_DEVICE_OPS)
-        self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
-        self.TEST_BATCH_SIZE = self.BATCH_SIZE * 5
+        self.TRAIN_BATCH_SIZE = self.TRAIN_IMAGES_PER_GPU * self.GPU_COUNT
+        self.TEST_BATCH_SIZE = self.TEST_IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size
         if self.IMAGE_RESIZE_MODE == "crop":

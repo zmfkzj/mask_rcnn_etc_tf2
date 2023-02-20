@@ -33,7 +33,6 @@ class DataLoader:
     image_pathes:Optional[Union[str,list[str]]] = None
     data_loader:Optional[tf.data.Dataset] = None
     augmentations:Optional[Sequential] = None
-    shuffle_buffer_size:int = 1024
 
     def __post_init__(self):
         backbone_shapes = compute_backbone_shapes(self.config)
@@ -49,7 +48,8 @@ class DataLoader:
 
         if self.mode == Mode.TRAIN:
             path = tf.data.Dataset\
-                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
+                .from_tensor_slices([img['path'] for img in coco.dataset['images']])\
+                .shuffle(len(self.dataset))
 
             ann_ids = [self.padding_ann_ids(coco.getAnnIds(img['id'], self.active_class_ids)) 
                        for img in coco.dataset['images']]
@@ -68,7 +68,6 @@ class DataLoader:
                 .zip((self.data_loader, active_class_id_dataset))\
                 .map(lambda datas, active_class_id: [*datas, active_class_id],
                      num_parallel_calls=tf.data.AUTOTUNE)\
-                .shuffle(self.shuffle_buffer_size)\
                 .batch(self.batch_size)\
                 .map(lambda *datas: [datas],
                      num_parallel_calls=tf.data.AUTOTUNE)\
