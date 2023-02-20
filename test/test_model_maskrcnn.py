@@ -71,9 +71,9 @@ class TestModel(unittest.TestCase):
 
         train_loader = DataLoader(config, Mode.TRAIN, config.BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset, shuffle_buffer_size=16)
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
+        val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 
         with config.STRATEGY.scope():
-            val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
             model = MaskRcnn(config)
             model.compile(val_metric,optimizer='adam')
 
