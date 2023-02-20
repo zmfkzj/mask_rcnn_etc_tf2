@@ -10,9 +10,6 @@ from MRCNN.data.dataset import Dataset
 from MRCNN.metric import CocoMetric, EvalType
 from MRCNN.model.mask_rcnn import MaskRcnn, TrainLayers
 
-# gpus = tf.config.experimental.list_physical_devices('GPU')
-# for gpu in gpus:
-#     tf.config.experimental.set_memory_growth(gpu, True)
 
 
 class TrainConfig(Config):
@@ -57,17 +54,18 @@ val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_va
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
-train_loader = DataLoader(config, active_class_ids, Mode.TRAIN, config.BATCH_SIZE, dataset=train_dataset,augmentations=augmentations)
-val_loader = DataLoader(config, active_class_ids, Mode.TEST,config.TEST_BATCH_SIZE, dataset=val_dataset)
+train_loader = DataLoader(config, Mode.TRAIN, config.BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}',monitor='mAP50',save_best_only=True, save_weights_only=True),
              keras.callbacks.TensorBoard(log_dir=f'logs_{now}'),
              keras.callbacks.EarlyStopping('mAP50')]
 
+val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
+
 with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
-    val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
-    model = MaskRcnn(config,train_dataset)
+    model = MaskRcnn(config)
 
     model.set_trainable(TrainLayers.HEADS)
     model.compile(val_metric,optimizer=optimizer)

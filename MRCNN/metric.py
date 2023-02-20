@@ -39,40 +39,42 @@ class CocoMetric(keras.metrics.Metric):
         self.include_mask = include_mask
 
 
-        self.image_ids:tf.Variable = self.add_weight(
-            name='image_ids', 
-            shape=[len(self.dataset)], 
-            aggregation=tf.VariableAggregation.NONE, 
-            dtype=tf.int32, 
-            initializer='zeros')
-        self.detections:tf.Variable = self.add_weight(
-            name='detections', 
-            shape=[len(self.dataset), config.DETECTION_MAX_INSTANCES,6], 
-            aggregation=tf.VariableAggregation.NONE, 
-            dtype=tf.float32, 
-            initializer='zeros')
-        self.origin_image_shapes:tf.Variable = self.add_weight(
-            name='origin_image_shapes', 
-            shape=[len(self.dataset),2], 
-            aggregation=tf.VariableAggregation.NONE, 
-            dtype=tf.int32, 
-            initializer='zeros')
-        self.windows:tf.Variable = self.add_weight(
-            name='windows', 
-            shape=[len(self.dataset),4], 
-            aggregation=tf.VariableAggregation.NONE, 
-            dtype=tf.int32, 
-            initializer='zeros')
-        if include_mask:
-            self.mrcnn_mask:tf.Variable = self.add_weight(
-                name='mrcnn_mask', 
-                shape=[len(self.dataset),config.DETECTION_MAX_INSTANCES,*config.MASK_SHAPE,config.NUM_CLASSES], 
+        with tf.device('CPU'):
+            self.current_count:tf.Variable = self.add_weight('current_count', initializer='zeros', dtype=tf.int32)
+            size = len(self.dataset)*config.DETECTION_MAX_INSTANCES
+
+            self.image_id:tf.Variable = self.add_weight( 
+                name=f'image_ids', 
+                shape=[size], 
+                aggregation=tf.VariableAggregation.NONE, 
+                dtype=tf.int32, 
+                initializer='zeros')
+            self.category_id:tf.Variable = self.add_weight( 
+                name=f'category_ids', 
+                shape=[size], 
+                aggregation=tf.VariableAggregation.NONE, 
+                dtype=tf.int32, 
+                initializer='zeros')
+            self.bbox:tf.Variable = self.add_weight( 
+                name=f'bboxes', 
+                shape=[size, 4], 
                 aggregation=tf.VariableAggregation.NONE, 
                 dtype=tf.float32, 
                 initializer='zeros')
+            self.score:tf.Variable = self.add_weight( 
+                name=f'scores', 
+                shape=[size], 
+                aggregation=tf.VariableAggregation.NONE, 
+                dtype=tf.float32, 
+                initializer='zeros')
+            self.segmentation:tf.Variable = self.add_weight( 
+                name=f'segmentations', 
+                shape=[size], 
+                aggregation=tf.VariableAggregation.NONE, 
+                dtype=tf.string, 
+                initializer=tf.initializers.Constant(''))
 
 
-    @tf.function
     def update_state(self, image_ids, detections,origin_image_shapes, window,mrcnn_mask=None):
         """
         Args:
@@ -82,40 +84,55 @@ class CocoMetric(keras.metrics.Metric):
             window (Tensor): Tensor(shape=[batch_size, 4]). 4 is (y1, x1, y2, x2).
             mrcnn_mask (Tensor, optional): Tensor(shape=[batch_size, detection_max_instances, MASK_SHAPE[0], MMASK_SHAPE[1], NUM_CLASSES]).
         """
-        current_count = tf.reduce_sum(tf.cast(tf.cast(image_ids, tf.bool), tf.int32))
-        batch_size = tf.shape(image_ids)[0]
+        coco_results = tf.py_function(self.build_coco_results, 
+                                      (image_ids, detections, origin_image_shapes, window, mrcnn_mask),
+                                      (tf.int32, tf.int32, tf.float32, tf.float32, tf.string))
+        image_id, category_id, bbox, score, segmentation = coco_results
 
-        self.image_ids.assign(
-            self.image_ids.scatter_update(
-            tf.IndexedSlices(image_ids, tf.range(current_count,current_count+batch_size))))
-        self.detections.assign(
-            self.detections.scatter_update(
-            tf.IndexedSlices(detections, tf.range(current_count,current_count+batch_size))))
-        self.origin_image_shapes.assign(
-            self.origin_image_shapes.scatter_update(
-            tf.IndexedSlices(origin_image_shapes, tf.range(current_count,current_count+batch_size))))
-        self.windows.assign(
-            self.windows.scatter_update(
-            tf.IndexedSlices(window, tf.range(current_count,current_count+batch_size))))
-        if self.include_mask:
-            self.mrcnn_mask.assign(
-                self.mrcnn_mask.scatter_update(
-                tf.IndexedSlices(mrcnn_mask, tf.range(current_count,current_count+batch_size))))
+        update_count = tf.shape(image_id)[0]
+
+        if update_count != 0:
+            self.image_id.assign(
+                self.image_id.scatter_update(tf.IndexedSlices(image_id, tf.range(self.current_count, self.current_count+update_count))))
+            self.category_id.assign(
+                self.category_id.scatter_update(tf.IndexedSlices(category_id, tf.range(self.current_count, self.current_count+update_count))))
+            self.bbox.assign(
+                self.bbox.scatter_update(tf.IndexedSlices(bbox, tf.range(self.current_count, self.current_count+update_count))))
+            self.score.assign(
+                self.score.scatter_update(tf.IndexedSlices(score, tf.range(self.current_count, self.current_count+update_count))))
+            self.segmentation.assign(
+                self.segmentation.scatter_update(tf.IndexedSlices(segmentation, tf.range(self.current_count, self.current_count+update_count))))
+
+            self.current_count.assign_add(update_count)
 
     
     @tf.function
     def result(self):
-        return tf.py_function(self._result,[self.image_ids],tf.float32)
+        return tf.py_function(self._result,[],tf.float32)
 
 
-    def _result(self, image_ids):
+    def _result(self):
         coco = deepcopy(self.dataset.coco)
-        coco_results = self.build_coco_results(self.image_ids, self.detections, self.origin_image_shapes, self.windows, self.mrcnn_mask)
+        coco_results = []
+        image_ids = {}
+
+        for i in tf.range(self.current_count):
+            result = {
+                "image_id": self.image_id[i].numpy(),
+                "category_id": self.category_id[i].numpy(),
+                "bbox": self.bbox[i].numpy(),
+                "score": self.score[i].numpy(),
+                'segmentation': self.segmentation[i].numpy()
+            }
+
+            coco_results.append(result)
+            image_ids.update(self.image_id[i].numpy())
+        
         if coco_results:
             coco_results = coco.loadRes(coco_results)
 
             coco_eval = COCOeval(coco, coco_results, self.eval_type.value)
-            coco_eval.params.imgIds = image_ids.numpy()
+            coco_eval.params.imgIds = list(image_ids)
             coco_eval.params.catIds = self.active_class_ids
             coco_eval.evaluate()
             coco_eval.accumulate()
@@ -174,9 +191,15 @@ class CocoMetric(keras.metrics.Metric):
         detections:np.ndarray = detections.numpy()
         origin_image_shapes:np.ndarray = origin_image_shapes.numpy()
         window:np.ndarray = window.numpy()
-        mrcnn_mask:np.ndarray = mrcnn_mask.numpy()
+        if mrcnn_mask is not None:
+            mrcnn_mask:np.ndarray = mrcnn_mask.numpy()
 
-        results = []
+
+        results_image_id = []
+        results_category_id = []
+        results_bbox = []
+        results_score = []
+        results_segmentation = []
         for i, image_id in enumerate(image_ids):
             if image_id==0:
                 continue
@@ -185,7 +208,7 @@ class CocoMetric(keras.metrics.Metric):
                                     origin_image_shapes[i], 
                                     tf.constant([self.config.IMAGE_MAX_DIM, self.config.IMAGE_MAX_DIM, 3]), 
                                     window[i],
-                                    mrcnn_mask=mrcnn_mask[i] if mrcnn_mask.size!=0 else None)
+                                    mrcnn_mask=mrcnn_mask)
             # Loop through detections
             for j in tf.range(tf.shape(final_rois)[0]):
                 class_id = final_class_ids[j]
@@ -193,36 +216,26 @@ class CocoMetric(keras.metrics.Metric):
                 bbox = final_rois[i]
                 mask = final_masks[:, :, i] if final_masks is not None else None
 
-                result = {
-                    "image_id": image_id,
-                    "category_id": self.dataset.get_source_class_id(class_id),
-                    "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
-                    "score": score
-                }
 
-                if mask is not None:
-                    result.update({"segmentation": maskUtils.encode(np.asfortranarray(mask))})
-                else:
-                    result.update({"segmentation": []})
+                results_image_id.append(image_id)
+                results_category_id.append(self.dataset.get_source_class_id(class_id))
+                results_bbox.append([bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]])
+                results_score.append(score)
+                results_segmentation.append(maskUtils.encode(np.asfortranarray(mask)) if mask is not None else "")
 
-                results.append(result)
-        return results
+        return (tf.constant(results_image_id, dtype=tf.int32), 
+                tf.constant(results_category_id, dtype=tf.int32),
+                tf.constant(results_bbox, dtype=tf.float32),
+                tf.constant(results_score, dtype=tf.float32),
+                tf.constant(results_segmentation, dtype=tf.string))
+
 
 
     @tf.function
     def reset_state(self):
-        self.image_ids.assign(
-            tf.zeros([len(self.dataset)], 
-                     dtype=tf.int32))
-        self.detections.assign(
-            tf.zeros([len(self.dataset), self.config.DETECTION_MAX_INSTANCES,6], 
-                     dtype=tf.float32))
-        self.origin_image_shapes.assign(
-            tf.zeros([len(self.dataset),2], 
-                     dtype=tf.int32))
-        self.windows.assign(
-            tf.zeros([len(self.dataset),4], 
-                     dtype=tf.int32))
-        self.mrcnn_mask.assign(
-            tf.zeros([len(self.dataset),self.config.DETECTION_MAX_INSTANCES,*self.config.MASK_SHAPE,self.config.NUM_CLASSES], 
-                     dtype=tf.float32))
+        size = len(self.dataset) * self.config.DETECTION_MAX_INSTANCES
+        self.image_id.assign(tf.zeros([size], dtype=tf.int32))
+        self.category_id.assign(tf.zeros([size], dtype=tf.int32))
+        self.bbox.assign(tf.zeros([size, 4], dtype=tf.float32))
+        self.score.assign(tf.zeros([size], dtype=tf.float32))
+        self.segmentation.assign(tf.zeros([size], dtype=tf.string))
