@@ -48,8 +48,7 @@ class DataLoader:
 
         if self.mode == Mode.TRAIN:
             path = tf.data.Dataset\
-                .from_tensor_slices([img['path'] for img in coco.dataset['images']])\
-                .shuffle(len(self.dataset))
+                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
 
             ann_ids = [self.padding_ann_ids(coco.getAnnIds(img['id'], self.active_class_ids)) 
                        for img in coco.dataset['images']]
@@ -57,6 +56,7 @@ class DataLoader:
 
             self.data_loader = tf.data.Dataset\
                 .zip((path, ann_ids))\
+                .shuffle(len(self.dataset))\
                 .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
                      num_parallel_calls=tf.data.AUTOTUNE)\
 

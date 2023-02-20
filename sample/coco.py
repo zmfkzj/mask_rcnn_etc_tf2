@@ -60,7 +60,7 @@ val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_i
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}',monitor='mAP50',save_best_only=True, save_weights_only=True),
              keras.callbacks.TensorBoard(log_dir=f'logs_{now}',update_freq='s'),
-             keras.callbacks.EarlyStopping('mAP50')]
+             keras.callbacks.EarlyStopping('mAP50', patience=10)]
 
 val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 
@@ -72,7 +72,7 @@ with config.STRATEGY.scope():
     model.compile(val_metric,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
-          epochs=100,
+          epochs=10000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
@@ -85,7 +85,7 @@ with config.STRATEGY.scope():
     model.compile(val_metric,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
-          epochs=300,
+          epochs=30000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
