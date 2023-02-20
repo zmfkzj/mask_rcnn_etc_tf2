@@ -186,7 +186,7 @@ def unmold_detections(detections, original_image_shape, image_shape, window, mrc
     class_ids = tf.cast(detections[:N, 4],tf.int64)
     scores = detections[:N, 5]
     if mrcnn_mask is not None:
-        masks = mrcnn_mask[:N, :, :, class_ids]
+        masks = mrcnn_mask[tf.range(N), :, :, class_ids]
 
     # Translate normalized coordinates in the resized image to pixel
     # coordinates in the original image before resizing
@@ -254,12 +254,15 @@ def unmold_mask(mask, bbox, image_shape):
     x1 = bbox[1]
     y2 = bbox[2]
     x2 = bbox[3]
+    mask = tf.expand_dims(mask, -1)
     mask = tf.image.resize(mask, (y2 - y1, x2 - x1), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
     mask = tf.cast(tf.where(mask >= threshold, 1, 0),tf.bool)
+    maks = tf.squeeze(mask, -1)
 
     # Put the mask in the right location.
     full_mask = tf.zeros(image_shape[:2], dtype=tf.bool)
-    full_mask[y1:y2, x1:x2] = mask
+    indices = tf.transpose(tf.meshgrid(tf.range(y1,y1), tf.range(x1,x2)))
+    full_mask = tf.tensor_scatter_nd_update(full_mask, indices, mask)
     return full_mask
 
 

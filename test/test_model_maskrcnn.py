@@ -12,22 +12,28 @@ from MRCNN.data.dataset import Dataset
 # tf.config.run_functions_eagerly(True)
 
 class TestModel(unittest.TestCase):
+    def setUp(self) -> None:
+        self.train_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json'
+        self.train_image_path='/home/tmdocker/host/dataset/coco/train2017/'
+        self.val_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json'
+        self.val_image_path='/home/tmdocker/host/dataset/coco/val2017/'
+
     def test_make_model(self):
         config = Config()
-        dataset = Dataset(json_path='/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_train.json',
-                          image_path='/home/tmdocker/host/dataset/5_coco_merge/images')
+        dataset = Dataset(json_path=self.train_json_path,
+                          image_path=self.train_image_path)
         model = MaskRcnn(config)
-        active_class_ids = [cat for cat in dataset.coco.cats]
+        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
         coco_metric = CocoMetric(dataset, config, active_class_ids,iou_thresh=0.5, eval_type=EvalType.SEGM)
         model.compile(coco_metric)
         self.assertTrue(True)
 
     def test_run_train_model(self):
         config = Config()
-        dataset = Dataset(json_path='/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_train.json',
-                          image_path='/home/tmdocker/host/dataset/5_coco_merge/images')
-        active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset, shuffle_buffer_size=16)
+        dataset = Dataset(json_path=self.train_json_path,
+                          image_path=self.train_image_path)
+        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
+        loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
         model = MaskRcnn(config)
         for data in loader:
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
@@ -39,10 +45,10 @@ class TestModel(unittest.TestCase):
 
     def test_run_test_model(self):
         config = Config()
-        dataset = Dataset(json_path='/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_train.json',
-                          image_path='/home/tmdocker/host/dataset/5_coco_merge/images')
-        active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, Mode.TEST, 2, active_class_ids=active_class_ids, dataset=dataset, shuffle_buffer_size=16)
+        dataset = Dataset(json_path=self.train_json_path,
+                          image_path=self.train_image_path)
+        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
+        loader = DataLoader(config, Mode.TEST, 2, active_class_ids=active_class_ids, dataset=dataset)
         model = MaskRcnn(config).test_model
         for data in loader:
             input_images, input_window, origin_image_shapes, image_ids = data[0]
@@ -62,14 +68,12 @@ class TestModel(unittest.TestCase):
     
     def test_train(self):
         config = Config()
-        train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
-                            '/home/tmdocker/host/dataset/coco/train2017/')
-        val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
-                            '/home/tmdocker/host/dataset/coco/val2017/')
+        train_dataset = Dataset(self.train_json_path, self.train_image_path)
+        val_dataset = Dataset(self.val_json_path, self.val_image_path)
 
-        active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
+        active_class_ids = [0]+[cat for cat in train_dataset.coco.cats]
 
-        train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset, shuffle_buffer_size=16)
+        train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset)
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
         val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 
@@ -82,9 +86,8 @@ class TestModel(unittest.TestCase):
 
     def test_evaluate(self):
         config = Config()
-        val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
-                            '/home/tmdocker/host/dataset/coco/val2017/')
-        active_class_ids = [cat['id'] for cat in val_dataset.coco.dataset['categories']]
+        val_dataset = Dataset(self.val_json_path, self.val_image_path)
+        active_class_ids = [0]+[cat for cat in val_dataset.coco.cats]
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
         val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 

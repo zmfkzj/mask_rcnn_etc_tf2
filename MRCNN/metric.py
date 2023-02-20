@@ -208,7 +208,7 @@ class CocoMetric(keras.metrics.Metric):
                                     origin_image_shapes[i], 
                                     tf.constant([self.config.IMAGE_MAX_DIM, self.config.IMAGE_MAX_DIM, 3]), 
                                     window[i],
-                                    mrcnn_mask=mrcnn_mask)
+                                    mrcnn_mask=mrcnn_mask[i] if mrcnn_mask is not None else None)
             # Loop through detections
             for j in tf.range(tf.shape(final_rois)[0]):
                 class_id = final_class_ids[j]

@@ -77,7 +77,7 @@ model.fit(iter(train_loader),
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
           validation_steps=config.VALIDATION_STEPS,
-          validation_freq=10)
+          validation_freq=1)
 
 
 with config.STRATEGY.scope():
@@ -90,6 +90,6 @@ model.fit(iter(train_loader),
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
           validation_steps=config.VALIDATION_STEPS,
-          validation_freq=10)
+          validation_freq=1)
 
 model.evaluate(iter(val_loader))
