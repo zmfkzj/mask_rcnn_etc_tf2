@@ -2,6 +2,7 @@ logs*
 save_model*
 mask_rcnn_coco.h5
 nohup.out
+save_*
 
 
 # Byte-compiled / optimized / DLL files

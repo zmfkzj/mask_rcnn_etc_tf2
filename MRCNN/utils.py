@@ -257,7 +257,7 @@ def unmold_mask(mask, bbox, image_shape):
     mask = tf.expand_dims(mask, -1)
     mask = tf.image.resize(mask, (y2 - y1, x2 - x1), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
     mask = tf.cast(tf.where(mask >= threshold, 1, 0),tf.bool)
-    maks = tf.squeeze(mask, -1)
+    mask = tf.squeeze(mask, -1)
 
     # Put the mask in the right location.
     full_mask = tf.zeros(image_shape[:2], dtype=tf.bool)

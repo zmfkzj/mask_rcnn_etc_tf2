@@ -1,22 +1,27 @@
-from enum import Enum
 import re
+from copy import deepcopy
+from enum import Enum
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
-from keras.engine.training import _minimum_control_deps, reduce_per_replica
 import numpy as np
+import pycocotools.mask as maskUtils
 import tensorflow as tf
+import tensorflow_addons as tfa
 import tensorflow_models as tfm
+from pycocotools.cocoeval import COCOeval
 
 from MRCNN import utils
 from MRCNN.config import Config
-from MRCNN.metric import CocoMetric
-from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
+from MRCNN.data.dataset import Dataset
+from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
+                        MrcnnMaskLossGraph, RpnBboxLossGraph,
+                        RpnClassLossGraph)
 
-from ..layer import (DetectionLayer, DetectionTargetLayer, ProposalLayer)
+from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer
 from ..model_utils.miscellenous_graph import NormBoxesGraph
-from ..utils import compute_backbone_shapes
+from ..utils import compute_backbone_shapes, unmold_detections
 from . import RPN, FPN_classifier, FPN_mask, Neck
 
 
@@ -26,6 +31,11 @@ class TrainLayers(Enum):
     HEADS = r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(meta\_.*)"
     # All layers
     ALL = ".*"
+
+
+class EvalType(Enum):
+    BBOX='bbox'
+    SEGM='segm'
 
 
 class MaskRcnn(KM.Model):
@@ -83,12 +93,20 @@ class MaskRcnn(KM.Model):
         self.test_model = self.make_test_model()
         self.train_model = self.make_train_model()
 
-    
-    def compile(self, coco_metric:CocoMetric, optimizer="rmsprop", loss=None, metrics=None, loss_weights=None, weighted_metrics=None, run_eagerly=None, steps_per_execution=None, jit_compile=None, **kwargs):
-        self.coco_metric = coco_metric
-        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
+
+        # for evaluation
+        self.val_results = []
+        self.param_image_ids = set()
     
 
+    def compile(self, dataset:Dataset, eval_type:EvalType, active_class_ids:list[int], iou_thresh: float = 0.5, optimizer="rmsprop", loss=None, metrics=None, loss_weights=None, weighted_metrics=None, run_eagerly=None, steps_per_execution=None, jit_compile=None, **kwargs):
+        self.dataset = dataset
+        self.eval_type = eval_type
+        self.active_class_ids = active_class_ids
+        self.iou_thresh = iou_thresh
+        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
+
+    
     def predict_step(self, data):
         input_images, input_window, origin_image_shapes, pathes = data[0]
         detections, mrcnn_mask = self.predict_model([input_images, input_window])
@@ -99,122 +117,35 @@ class MaskRcnn(KM.Model):
     def test_step(self, data):
         input_images, input_window, origin_image_shapes, image_ids = data[0]
         detections, mrcnn_mask = self.test_model([input_images, input_window])
-        self.coco_metric.update_state(image_ids, detections, origin_image_shapes, input_window, mrcnn_mask)
-        results = self.coco_metric.result()
-        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = tf.unstack(results,12)
+
+        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window, mrcnn_mask), ())
+
+        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
+            tf.py_function(self.get_coco_metrics, (), 
+                           (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,))
         return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
-        return {}
 
 
     def train_step(self, data):
-        def step_fn(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids):
-            with tf.GradientTape() as tape:
-                rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
-                    self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
-            gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
-            self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
-            return rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss
-        
         resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
-        rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
-            step_fn(resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids)
 
+        with tf.GradientTape() as tape:
+            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
+                self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
+        gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+        
         reg_losses = self.train_model.losses[0]
+
+        self.param_image_ids.clear()
+        self.val_results.clear()
 
         return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
 
-    # def make_test_function(self, force=False):
-    #     if self.test_function is not None and not force:
-    #         return self.test_function
-
-    #     def step_function(model, iterator):
-    #         """Runs a single evaluation step."""
-
-    #         def run_step(data):
-    #             outputs = model.test_step(data)
-    #             # Ensure counter is updated only if `test_step` succeeds.
-    #             with tf.control_dependencies(_minimum_control_deps(outputs)):
-    #                 model._test_counter.assign_add(1)
-    #             return outputs
-
-    #         if self.jit_compile:
-    #             run_step = tf.function(
-    #                 run_step, jit_compile=True, reduce_retracing=True
-    #             )
-
-    #         data = next(iterator)
-    #         outputs = model.distribute_strategy.run(run_step, args=(data,))
-    #         outputs = reduce_per_replica(
-    #             outputs,
-    #             self.distribute_strategy,
-    #             reduction=self.distribute_reduction_method,
-    #         )
-    #         return outputs
-
-    #     # Special case if steps_per_execution is one.
-    #     if (
-    #         self._steps_per_execution is None
-    #         or self._steps_per_execution.numpy().item() == 1
-    #     ):
-
-    #         def test_function(iterator):
-    #             """Runs a test execution with a single step."""
-    #             return step_function(self, iterator)
-
-    #         if not self.run_eagerly:
-    #             test_function = tf.function(
-    #                 test_function, reduce_retracing=True
-    #             )
-
-    #         if self._cluster_coordinator:
-    #             self.test_function = (
-    #                 lambda it: self._cluster_coordinator.schedule(
-    #                     test_function, args=(it,)
-    #                 )
-    #             )
-    #         else:
-    #             self.test_function = test_function
-
-    #     # If we're using a coordinator, use the value of
-    #     # self._steps_per_execution at the time the function is
-    #     # called/scheduled, and not when it is actually executed.
-    #     elif self._cluster_coordinator:
-
-    #         def test_function(iterator, steps_per_execution):
-    #             """Runs a test execution with multiple steps."""
-    #             for _ in tf.range(steps_per_execution):
-    #                 outputs = step_function(self, iterator)
-    #             return outputs
-
-    #         if not self.run_eagerly:
-    #             test_function = tf.function(
-    #                 test_function, reduce_retracing=True
-    #             )
-
-    #         self.test_function = lambda it: self._cluster_coordinator.schedule(
-    #             test_function, args=(it, self._steps_per_execution.value())
-    #         )
-    #     else:
-
-    #         def test_function(iterator):
-    #             """Runs a test execution with multiple steps."""
-    #             for _ in tf.range(self._steps_per_execution):
-    #                 outputs = step_function(self, iterator)
-    #             return outputs
-
-    #         if not self.run_eagerly:
-    #             test_function = tf.function(
-    #                 test_function, reduce_retracing=True
-    #             )
-    #         self.test_function = test_function
-
-    #     return self.test_function
-    
-
     def make_predict_model(self):
-        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='input_image')
-        input_window = KL.Input(shape=(4,), name="input_window")
+        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='predict_input_image')
+        input_window = KL.Input(shape=(4,), name="predict_input_window")
 
         backbone_output = self.backbone(input_image)
         P3,P4,P5,P6 = self.neck(*backbone_output)
@@ -242,7 +173,7 @@ class MaskRcnn(KM.Model):
         batch_size = tf.shape(input_image)[0]
         anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
-        rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
+        rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="predict_ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         
         # roi_cls_feature = self.ROIAlign_classifier(rpn_rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
         roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, rpn_rois)
@@ -250,7 +181,7 @@ class MaskRcnn(KM.Model):
         # Network Heads
         # Proposal classifier and BBox regressor heads
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
-        detections = DetectionLayer(self.config, name="mrcnn_detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
+        detections = DetectionLayer(self.config, name="predict_mrcnn_detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
 
         # Create masks for detections
         detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
@@ -260,7 +191,7 @@ class MaskRcnn(KM.Model):
 
         model = keras.Model([input_image, input_window],
                             [detections, mrcnn_mask],
-                            name='mask_rcnn')
+                            name='predict_mask_rcnn')
         return model
     
 
@@ -269,23 +200,23 @@ class MaskRcnn(KM.Model):
     
 
     def make_train_model(self):
-        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="input_image")
-        active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="input_class_ids")
+        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="train_input_image")
+        active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="train_input_class_ids")
         # RPN GT
-        input_rpn_match = KL.Input( shape=[None, 1], name="input_rpn_match", dtype=tf.int64)
-        input_rpn_bbox = KL.Input( shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
+        input_rpn_match = KL.Input( shape=[None, 1], name="train_input_rpn_match", dtype=tf.int64)
+        input_rpn_bbox = KL.Input( shape=[None, 4], name="train_input_rpn_bbox", dtype=tf.float32)
 
         # Detection GT (class IDs, bounding boxes, and masks)
         # 1. GT Class IDs (zero padded)
-        input_gt_class_ids = KL.Input( shape=[None], name="input_gt_class_ids", dtype=tf.int64)
+        input_gt_class_ids = KL.Input( shape=[None], name="train_input_gt_class_ids", dtype=tf.int64)
         # 2. GT Boxes in pixels (zero padded)
         # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
-        input_gt_boxes = KL.Input( shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
+        input_gt_boxes = KL.Input( shape=[None, 4], name="train_input_gt_boxes", dtype=tf.float32)
         # Normalize coordinates
         gt_boxes = NormBoxesGraph()(input_gt_boxes, tf.shape(input_image)[1:3])
         # 3. GT Masks (zero padded)
         # [batch, height, width, MAX_GT_INSTANCES]
-        input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="input_gt_masks", dtype=bool)
+        input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="train_input_gt_masks", dtype=bool)
 
         backbone_output = self.backbone(input_image)
         P3,P4,P5,P6 = self.neck(*backbone_output)
@@ -314,7 +245,7 @@ class MaskRcnn(KM.Model):
         batch_size = tf.shape(input_image)[0]
         anchors = tf.broadcast_to(self.anchors, tf.concat([(batch_size,),tf.shape(self.anchors)],-1))
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
-        rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
+        rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="train_ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
 
 
         # Generate detection targets
@@ -322,7 +253,7 @@ class MaskRcnn(KM.Model):
         # Note that proposal class IDs, gt_boxes, and gt_masks are zero
         # padded. Equally, returned rois and targets are zero padded.
         rois, target_class_ids, target_bbox, target_mask =\
-            DetectionTargetLayer(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+            DetectionTargetLayer(self.config, name="train_proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
         
         # roi_cls_features = self.ROIAlign_classifier(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
         # roi_mask_features = self.ROIAlign_mask(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
@@ -346,7 +277,7 @@ class MaskRcnn(KM.Model):
         inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
         outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
 
-        model = keras.Model(inputs, outputs, name='mask_rcnn')
+        model = keras.Model(inputs, outputs, name='train_mask_rcnn')
 
         reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                         for w in model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name]
@@ -475,3 +406,107 @@ class MaskRcnn(KM.Model):
         else:
             layers[model.name]=model
         return layers
+    
+
+    def build_coco_results(self, image_ids, detections, origin_image_shapes, window, mrcnn_mask):
+        """
+        Args:
+            image_ids (Tensor): Tensor(shape=[batch_size]).
+            detections (Tensor): Tensor(shape=[batch_size, detection_max_instances, 6]). 6 is (y1, x1, y2, x2, class_id, class_score).
+            origin_image_shapes (Tensor): Tensor(shape=[batch_size, 2]). 2 is (height, width).
+            window (Tensor): Tensor(shape=[batch_size, 4]). 4 is (y1, x1, y2, x2).
+            mrcnn_mask (Tensor, optional): Tensor(shape=[batch_size, detection_max_instances, MASK_SHAPE[0], MASK_SHAPE[1], NUM_CLASSES]).
+        """
+        image_ids = image_ids.numpy()
+        detections = detections.numpy()
+        origin_image_shapes = origin_image_shapes.numpy()
+        window = window.numpy()
+        mrcnn_mask = mrcnn_mask.numpy()
+
+        for b in range(image_ids.shape[0]):
+            if image_ids[b]==0:
+                continue
+
+            self.param_image_ids.add(image_ids[b])
+
+            final_rois, final_class_ids, final_scores, final_masks =\
+                unmold_detections(detections[b], 
+                                    origin_image_shapes[b], 
+                                    tf.constant([self.config.IMAGE_MAX_DIM, self.config.IMAGE_MAX_DIM, 3]), 
+                                    window[b],
+                                    mrcnn_mask=mrcnn_mask[b] if mrcnn_mask is not None else None)
+
+            # Loop through detections
+            for j in range(final_rois.shape[0]):
+                class_id = final_class_ids[j]
+                score = final_scores[j]
+                bbox = final_rois[j]
+                mask = final_masks[:, :, j] if final_masks is not None else None
+
+
+                result = {
+                    "image_id": image_ids[b],
+                    "category_id": self.dataset.get_source_class_id(class_id),
+                    "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
+                    "score": score,
+                    'segmentation': maskUtils.encode(np.asfortranarray(mask)) 
+                                    if mrcnn_mask is not None else []
+                    }
+
+                self.val_results.append(result)
+        
+
+    def get_coco_metrics(self):
+        coco = deepcopy(self.dataset.coco)
+        if self.val_results:
+            coco_results = coco.loadRes(self.val_results)
+
+            coco_eval = COCOeval(coco, coco_results, self.eval_type.value)
+            coco_eval.params.imgIds = list(self.param_image_ids)
+            coco_eval.params.catIds = self.active_class_ids
+            coco_eval.evaluate()
+            coco_eval.accumulate()
+            coco_eval.summarize()
+            mAP = coco_eval.stats[0]
+            mAP50 = coco_eval.stats[1]
+            mAP75 = coco_eval.stats[2]
+
+            results = [mAP, mAP50, mAP75]
+
+
+            true = []
+            pred = []
+            sample_weight = []
+            iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[self.iou_thresh]
+            for img in coco_eval.evalImgs:
+                if img is not None and img['aRng']==[0, 10000000000.0]:
+                    gtIds:list = img['gtIds']
+                    dtScores = img['dtScores']
+                    dtMatches = img['dtMatches'][iou_idx]
+                    cat_idx = ([0]+self.active_class_ids).index(img['category_id'])
+
+                    _true, _pred, _sample_weight = zip(*([(cat_idx,1,0) if gtId in dtMatches else (cat_idx,0,1) for gtId in gtIds] 
+                                                        + [(0,score,1) if gtId==0 else (cat_idx,score,1) for gtId, score in zip(dtMatches,dtScores)]))
+                    _true = tf.one_hot(_true, len(self.active_class_ids)+1)
+                    _pred = _true*tf.expand_dims(tf.constant(_pred, tf.float32),-1)
+                    _sample_weight = tf.constant(_sample_weight,tf.float32)
+                    true.extend(_true)
+                    pred.extend(_pred)
+                    sample_weight.extend(_sample_weight)
+
+
+            metrics = []
+            for conf_thresh in tf.range(0.1,1,0.1):
+                metrics.append(tfa.metrics.F1Score(num_classes=len(self.active_class_ids)+1, average=None,threshold=conf_thresh))
+            for  metric_fn in metrics:
+                if true:
+                    metric_fn.reset_state()
+                    metric_fn.update_state(true, pred, sample_weight)
+                    results.append(tf.reduce_mean(metric_fn.result()[1:]))
+                else:
+                    results.append(0.)
+            
+        else:
+            results = [0.]*12
+
+        return results # [mAP, mAP50, mAP75, F1_0.1, F1_0.2, F1_0.3, F1_0.4, F1_0.5, F1_0.6, F1_0.7, F1_0.8, F1_0.9]

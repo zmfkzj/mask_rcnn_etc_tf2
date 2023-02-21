@@ -1,8 +1,8 @@
 import datetime
 import imgaug.augmenters as iaa
 import keras.api._v2.keras as keras
-import numpy as np
 import tensorflow as tf
+import os
 
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
@@ -18,9 +18,9 @@ class TrainConfig(Config):
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.0005
     TRAIN_IMAGES_PER_GPU = 12
-    TEST_IMAGES_PER_GPU = 20
-    STEPS_PER_EPOCH = 100
-    VALIDATION_STEPS = 50
+    TEST_IMAGES_PER_GPU = 12
+    STEPS_PER_EPOCH = 10
+    VALIDATION_STEPS = 2
     
 
 config = TrainConfig()
@@ -58,18 +58,20 @@ active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories'
 train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}',monitor='mAP50',save_best_only=True, save_weights_only=True),
-             keras.callbacks.TensorBoard(log_dir=f'logs_{now}',update_freq='s'),
-             keras.callbacks.EarlyStopping('mAP50', patience=10)]
+if not os.path.isdir(f'save_{now}/chpt'):
+    os.makedirs(f'save_{now}/chpt')
 
-val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'{epoch:02d}-{val_mAP50:.4f}.tf',monitor='val_mAP50',save_best_only=True, save_weights_only=True),
+             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10)]
+
 
 with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model = MaskRcnn(config)
 
     model.set_trainable(TrainLayers.HEADS)
-    model.compile(val_metric,optimizer=optimizer)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
           epochs=10000,
@@ -82,7 +84,7 @@ model.fit(iter(train_loader),
 
 with config.STRATEGY.scope():
     model.set_trainable(TrainLayers.ALL)
-    model.compile(val_metric,optimizer=optimizer)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
           epochs=30000,

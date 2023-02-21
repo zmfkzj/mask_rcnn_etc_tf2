@@ -54,7 +54,7 @@ class Config(object):
     # See model.compute_backbone_shapes
     COMPUTE_BACKBONE_SHAPE = None
 
-    CROSS_DEVICE_OPS = tf.distribute.HierarchicalCopyAllReduce()
+    CROSS_DEVICE_OPS = tf.distribute.NcclAllReduce()
 
     # The strides of each layer of the FPN Pyramid. These values
     # are based on a Resnet101 backbone.

@@ -18,14 +18,14 @@ class TestModel(unittest.TestCase):
         self.val_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json'
         self.val_image_path='/home/tmdocker/host/dataset/coco/val2017/'
 
+
     def test_make_model(self):
         config = Config()
         dataset = Dataset(json_path=self.train_json_path,
                           image_path=self.train_image_path)
         model = MaskRcnn(config)
         active_class_ids = [0]+[cat for cat in dataset.coco.cats]
-        coco_metric = CocoMetric(dataset, config, active_class_ids,iou_thresh=0.5, eval_type=EvalType.SEGM)
-        model.compile(coco_metric)
+        model.compile(dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
         self.assertTrue(True)
 
     def test_run_train_model(self):
@@ -75,11 +75,10 @@ class TestModel(unittest.TestCase):
 
         train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset)
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
-        val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 
         with config.STRATEGY.scope():
             model = MaskRcnn(config)
-            model.compile(val_metric,optimizer='adam')
+            model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
 
         model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
 
@@ -89,11 +88,10 @@ class TestModel(unittest.TestCase):
         val_dataset = Dataset(self.val_json_path, self.val_image_path)
         active_class_ids = [0]+[cat for cat in val_dataset.coco.cats]
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
-        val_metric = CocoMetric(val_dataset, config, active_class_ids,eval_type=EvalType.SEGM)
 
         with config.STRATEGY.scope():
             model = MaskRcnn(config)
-            model.compile(val_metric,optimizer='adam')
+            model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
 
         results = model.evaluate(iter(val_loader), steps=2)
         print(results)
