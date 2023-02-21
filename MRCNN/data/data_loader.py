@@ -71,6 +71,7 @@ class DataLoader:
                 .batch(self.batch_size)\
                 .map(lambda *datas: [datas],
                      num_parallel_calls=tf.data.AUTOTUNE)\
+                .repeat()\
                 .prefetch(tf.data.AUTOTUNE)
 
         elif self.mode == Mode.PREDICT:
@@ -112,6 +113,7 @@ class DataLoader:
                 .batch(self.batch_size)\
                 .map(lambda *datas: [datas],
                      num_parallel_calls=tf.data.AUTOTUNE)\
+                .repeat()\
                 .prefetch(tf.data.AUTOTUNE)
 
 

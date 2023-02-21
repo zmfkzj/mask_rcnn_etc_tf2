@@ -16,11 +16,11 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.0005
-    TRAIN_IMAGES_PER_GPU = 12
-    TEST_IMAGES_PER_GPU = 12
-    STEPS_PER_EPOCH = 10
-    VALIDATION_STEPS = 2
+    LEARNING_RATE = 0.0001
+    TRAIN_IMAGES_PER_GPU = 3
+    TEST_IMAGES_PER_GPU = 8
+    STEPS_PER_EPOCH = 1000
+    VALIDATION_STEPS = 20
     
 
 config = TrainConfig()
@@ -37,7 +37,7 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
                 lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
                 lambda : super_lr)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 9000,0.95,500, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 9000,0.95,1, staircase=True)
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -61,9 +61,9 @@ val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_i
 if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'{epoch:02d}-{val_mAP50:.4f}.tf',monitor='val_mAP50',save_best_only=True, save_weights_only=True),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'{epoch:02d}-{val_mAP50:.4f}',monitor='val_mAP50',save_best_only=True, save_weights_only=True),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10)]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10,)]
 
 
 with config.STRATEGY.scope():
@@ -74,12 +74,11 @@ with config.STRATEGY.scope():
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
-          epochs=10000,
+          epochs=100000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS,
-          validation_freq=1)
+          validation_steps=config.VALIDATION_STEPS)
 
 
 with config.STRATEGY.scope():
@@ -87,11 +86,11 @@ with config.STRATEGY.scope():
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 model.fit(iter(train_loader), 
-          epochs=30000,
+          epochs=300000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS,
-          validation_freq=1)
+          validation_steps=config.VALIDATION_STEPS)
 
-model.evaluate(iter(val_loader))
+result = model.evaluate(iter(val_loader),steps=1000)
+print(result)
