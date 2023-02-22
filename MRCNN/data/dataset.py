@@ -17,7 +17,7 @@ class Dataset:
     
 
     def get_source_class_id(self, dataloader_class_id):
-        return self.coco.dataset['categories'][dataloader_class_id-1] 
+        return self.coco.dataset['categories'][dataloader_class_id-1]['id']
     
 
     def get_dataloader_class_id(self, source_class_id):

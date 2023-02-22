@@ -1,6 +1,9 @@
+import copy
 import re
 from copy import deepcopy
 from enum import Enum
+import time
+from pycocotools.coco import COCO
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
@@ -374,29 +377,29 @@ class MaskRcnn(KM.Model):
         return self._anchor_cache[key]
     
 
-    def load_weights(self, filepath):
-        import h5py
+    # def load_weights(self, filepath):
+    #     import h5py
 
-        f = h5py.File(filepath, mode='r')
-        saved_root_layer_names = [name if isinstance(name, str) else name.decode('utf-8') for name in f.attrs['layer_names']]
-        saved_weight_names = []
-        saved_weight_values = []
-        for ln in saved_root_layer_names:
-            for wn in f[ln].attrs['weight_names']:
-                if not isinstance(wn, str):
-                    wn = wn.decode('utf-8') 
-                saved_weight_values.append(f[f'/{ln}/{wn}'])
-                saved_weight_names.append('/'.join(wn.split('/')[-2:]))
-        saved_weights = dict(zip(saved_weight_names,saved_weight_values))
-        model_layers = self.collect_layers(self)
-        for l in model_layers.values():
-            for w in l.weights:
-                weight_name = '/'.join(w.name.split('/')[-2:])
-                if (weight_name in saved_weights) and (tuple(w.shape)==saved_weights[weight_name].shape):
-                    w.assign(np.array(saved_weights[weight_name]))
-                else:
-                    print(f'{weight_name}\ can\'t assign')
-        return self
+    #     f = h5py.File(filepath, mode='r')
+    #     saved_root_layer_names = [name if isinstance(name, str) else name.decode('utf-8') for name in f.attrs['layer_names']]
+    #     saved_weight_names = []
+    #     saved_weight_values = []
+    #     for ln in saved_root_layer_names:
+    #         for wn in f[ln].attrs['weight_names']:
+    #             if not isinstance(wn, str):
+    #                 wn = wn.decode('utf-8') 
+    #             saved_weight_values.append(f[f'/{ln}/{wn}'])
+    #             saved_weight_names.append('/'.join(wn.split('/')[-2:]))
+    #     saved_weights = dict(zip(saved_weight_names,saved_weight_values))
+    #     model_layers = self.collect_layers(self)
+    #     for l in model_layers.values():
+    #         for w in l.weights:
+    #             weight_name = '/'.join(w.name.split('/')[-2:])
+    #             if (weight_name in saved_weights) and (tuple(w.shape)==saved_weights[weight_name].shape):
+    #                 w.assign(np.array(saved_weights[weight_name]))
+    #             else:
+    #                 print(f'{weight_name}\ can\'t assign')
+    #     return self
 
     def collect_layers(self, model):
         layers = {}
@@ -458,12 +461,20 @@ class MaskRcnn(KM.Model):
 
     def get_coco_metrics(self):
         coco = deepcopy(self.dataset.coco)
-        if self.val_results:
-            coco_results = coco.loadRes(self.val_results)
+        val_results = list(self.val_results)
+        for i, r in enumerate(val_results):
+            val_results[i] = {'image_id':int(r['image_id']),
+                              'category_id':int(r['category_id']),
+                              'bbox':[float(b) for b in r['bbox']],
+                              'score':float(r['score']),
+                              'segmentation':{'size':[int(s) for s in r['segmentation']['size']],
+                                              'counts':r['segmentation']['counts']}}
+        if val_results:
+            coco_results = coco.loadRes(val_results)
 
             coco_eval = COCOeval(coco, coco_results, self.eval_type.value)
             coco_eval.params.imgIds = list(self.param_image_ids)
-            coco_eval.params.catIds = self.active_class_ids
+            coco_eval.params.catIds = list(self.active_class_ids)
             coco_eval.evaluate()
             coco_eval.accumulate()
             coco_eval.summarize()
@@ -477,13 +488,13 @@ class MaskRcnn(KM.Model):
             true = []
             pred = []
             sample_weight = []
-            iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[self.iou_thresh]
+            iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[float(self.iou_thresh)]
             for img in coco_eval.evalImgs:
                 if img is not None and img['aRng']==[0, 10000000000.0]:
                     gtIds:list = img['gtIds']
                     dtScores = img['dtScores']
                     dtMatches = img['dtMatches'][iou_idx]
-                    cat_idx = ([0]+self.active_class_ids).index(img['category_id'])
+                    cat_idx = ([0]+list(self.active_class_ids)).index(img['category_id'])
 
                     _true, _pred, _sample_weight = zip(*([(cat_idx,1,0) if gtId in dtMatches else (cat_idx,0,1) for gtId in gtIds] 
                                                         + [(0,score,1) if gtId==0 else (cat_idx,score,1) for gtId, score in zip(dtMatches,dtScores)]))
@@ -496,7 +507,8 @@ class MaskRcnn(KM.Model):
 
 
             metrics = []
-            for conf_thresh in tf.range(0.1,1,0.1):
+            for conf_thresh in np.arange(0.1,1,0.1):
+                conf_thresh = np.around(conf_thresh,1)
                 metrics.append(tfa.metrics.F1Score(num_classes=len(self.active_class_ids)+1, average=None,threshold=conf_thresh))
             for  metric_fn in metrics:
                 if true:

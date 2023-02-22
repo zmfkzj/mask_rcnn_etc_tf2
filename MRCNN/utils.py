@@ -117,7 +117,6 @@ def norm_boxes(boxes, shape):
 
 
 
-@tf.function
 def denorm_boxes(boxes, shape):
     """Converts boxes from normalized coordinates to pixel coordinates.
     boxes: [N, (y1, x1, y2, x2)] in normalized coordinates
@@ -129,11 +128,10 @@ def denorm_boxes(boxes, shape):
     Returns:
         [N, (y1, x1, y2, x2)] in pixel coordinates
     """
-    h = shape[0]
-    w = shape[1]
-    scale = tf.cast(tf.stack([h - 1, w - 1, h - 1, w - 1]), tf.float32)
-    shift = tf.stack([0., 0., 1., 1.])
-    return tf.cast(tf.round(tf.multiply(boxes, scale) + shift),tf.int64)
+    h, w = shape
+    scale = np.array([h - 1, w - 1, h - 1, w - 1])
+    shift = np.array([0, 0, 1, 1])
+    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
 
 
 def compute_backbone_shapes(config:Config):
@@ -229,11 +227,11 @@ def unmold_mask(mask, bbox, image_shape):
     """
     threshold = 0.5
     y1, x1, y2, x2 = bbox
-    mask = cv2.resize(mask, (y2 - y1, x2 - x1), interpolation=cv2.INTER_LINEAR)
-    mask = np.where(mask >= threshold, 1, 0).astype(np.bool)
+    mask = cv2.resize(mask, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
+    mask = np.where(mask >= threshold, 1, 0).astype(bool)
 
     # Put the mask in the right location.
-    full_mask = np.zeros(image_shape[:2], dtype=np.bool)
+    full_mask = np.zeros(image_shape[:2], dtype=bool)
     full_mask[y1:y2, x1:x2] = mask
     return full_mask
     # threshold = 0.5

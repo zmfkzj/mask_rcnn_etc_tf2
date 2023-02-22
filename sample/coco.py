@@ -19,8 +19,9 @@ class TrainConfig(Config):
     LEARNING_RATE = 0.0001
     TRAIN_IMAGES_PER_GPU = 3
     TEST_IMAGES_PER_GPU = 8
-    STEPS_PER_EPOCH = 1000
+    STEPS_PER_EPOCH = 10
     VALIDATION_STEPS = 20
+    DETECTION_MIN_CONFIDENCE = 0.001
     
 
 config = TrainConfig()
@@ -37,7 +38,7 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
                 lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
                 lambda : super_lr)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 9000,0.95,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 50000,0.9,1, staircase=True)
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -63,7 +64,7 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'{epoch:02d}-{val_mAP50:.4f}',monitor='val_mAP50',save_best_only=True, save_weights_only=True),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10,)]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10,start_from_epoch=50)]
 
 
 with config.STRATEGY.scope():
@@ -82,6 +83,7 @@ model.fit(iter(train_loader),
 
 
 with config.STRATEGY.scope():
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
