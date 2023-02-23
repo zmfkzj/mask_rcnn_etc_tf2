@@ -7,8 +7,7 @@ import os
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
 from MRCNN.data.dataset import Dataset
-from MRCNN.metric import CocoMetric, EvalType
-from MRCNN.model.mask_rcnn import MaskRcnn, TrainLayers
+from MRCNN.model.mask_rcnn import EvalType, MaskRcnn, TrainLayers
 
 
 
@@ -19,9 +18,8 @@ class TrainConfig(Config):
     LEARNING_RATE = 0.0001
     TRAIN_IMAGES_PER_GPU = 3
     TEST_IMAGES_PER_GPU = 8
-    STEPS_PER_EPOCH = 10
+    STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 20
-    DETECTION_MIN_CONFIDENCE = 0.001
     
 
 config = TrainConfig()
@@ -62,28 +60,17 @@ val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_i
 if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'{epoch:02d}-{val_mAP50:.4f}',monitor='val_mAP50',save_best_only=True, save_weights_only=True),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10,start_from_epoch=50)]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10,start_from_epoch=10)]
 
 
 with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model = MaskRcnn(config)
 
-    model.set_trainable(TrainLayers.HEADS)
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
-
-model.fit(iter(train_loader), 
-          epochs=100000,
-          callbacks=callbacks,
-          validation_data=iter(val_loader), 
-          steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS)
-
-
-with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.load_weights('save_2023-02-23T10:51:47.314532/chpt/01-0.0000')
+    # model.set_trainable(TrainLayers.HEADS)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
@@ -93,6 +80,19 @@ model.fit(iter(train_loader),
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
           validation_steps=config.VALIDATION_STEPS)
+
+
+# with config.STRATEGY.scope():
+#     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+#     model.set_trainable(TrainLayers.ALL)
+#     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+
+# model.fit(iter(train_loader), 
+#           epochs=300000,
+#           callbacks=callbacks,
+#           validation_data=iter(val_loader), 
+#           steps_per_epoch=config.STEPS_PER_EPOCH,
+#           validation_steps=config.VALIDATION_STEPS)
 
 result = model.evaluate(iter(val_loader),steps=1000)
 print(result)

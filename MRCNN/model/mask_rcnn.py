@@ -1,9 +1,7 @@
-import copy
 import re
 from copy import deepcopy
 from enum import Enum
-import time
-from pycocotools.coco import COCO
+from sklearn.preprocessing import OneHotEncoder
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
@@ -21,6 +19,7 @@ from MRCNN.data.dataset import Dataset
 from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         MrcnnMaskLossGraph, RpnBboxLossGraph,
                         RpnClassLossGraph)
+from MRCNN.metric import F1Score
 
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer
 from ..model_utils.miscellenous_graph import NormBoxesGraph
@@ -96,7 +95,6 @@ class MaskRcnn(KM.Model):
         self.test_model = self.make_test_model()
         self.train_model = self.make_train_model()
 
-
         # for evaluation
         self.val_results = []
         self.param_image_ids = set()
@@ -122,11 +120,7 @@ class MaskRcnn(KM.Model):
         detections, mrcnn_mask = self.test_model([input_images, input_window])
 
         tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window, mrcnn_mask), ())
-
-        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
-            tf.py_function(self.get_coco_metrics, (), 
-                           (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,))
-        return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
+        return {}
 
 
     def train_step(self, data):
@@ -140,10 +134,20 @@ class MaskRcnn(KM.Model):
         
         reg_losses = self.train_model.losses[0]
 
+        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+
+
+    def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
         self.param_image_ids.clear()
         self.val_results.clear()
 
-        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+        super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
+
+        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
+            tf.py_function(self.get_coco_metrics, (), 
+                           (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
+
+        return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
 
 
     def make_predict_model(self):
@@ -377,30 +381,6 @@ class MaskRcnn(KM.Model):
         return self._anchor_cache[key]
     
 
-    # def load_weights(self, filepath):
-    #     import h5py
-
-    #     f = h5py.File(filepath, mode='r')
-    #     saved_root_layer_names = [name if isinstance(name, str) else name.decode('utf-8') for name in f.attrs['layer_names']]
-    #     saved_weight_names = []
-    #     saved_weight_values = []
-    #     for ln in saved_root_layer_names:
-    #         for wn in f[ln].attrs['weight_names']:
-    #             if not isinstance(wn, str):
-    #                 wn = wn.decode('utf-8') 
-    #             saved_weight_values.append(f[f'/{ln}/{wn}'])
-    #             saved_weight_names.append('/'.join(wn.split('/')[-2:]))
-    #     saved_weights = dict(zip(saved_weight_names,saved_weight_values))
-    #     model_layers = self.collect_layers(self)
-    #     for l in model_layers.values():
-    #         for w in l.weights:
-    #             weight_name = '/'.join(w.name.split('/')[-2:])
-    #             if (weight_name in saved_weights) and (tuple(w.shape)==saved_weights[weight_name].shape):
-    #                 w.assign(np.array(saved_weights[weight_name]))
-    #             else:
-    #                 print(f'{weight_name}\ can\'t assign')
-    #     return self
-
     def collect_layers(self, model):
         layers = {}
         if isinstance(model, KM.Model):
@@ -494,13 +474,12 @@ class MaskRcnn(KM.Model):
                     gtIds:list = img['gtIds']
                     dtScores = img['dtScores']
                     dtMatches = img['dtMatches'][iou_idx]
-                    cat_idx = ([0]+list(self.active_class_ids)).index(img['category_id'])
+                    cat_idx = self.dataset.get_dataloader_class_id(img['category_id'])-1
 
-                    _true, _pred, _sample_weight = zip(*([(cat_idx,1,0) if gtId in dtMatches else (cat_idx,0,1) for gtId in gtIds] 
-                                                        + [(0,score,1) if gtId==0 else (cat_idx,score,1) for gtId, score in zip(dtMatches,dtScores)]))
-                    _true = tf.one_hot(_true, len(self.active_class_ids)+1)
-                    _pred = _true*tf.expand_dims(tf.constant(_pred, tf.float32),-1)
-                    _sample_weight = tf.constant(_sample_weight,tf.float32)
+                    _true, _pred, _sample_weight = zip(*([(cat_idx,1.,0.) if gtId in dtMatches else (cat_idx,0.,1.) for gtId in gtIds] 
+                                                        + [(0,score,1.) if gtId==0 else (cat_idx,score,1.) for gtId, score in zip(dtMatches,dtScores)]))
+                    _true = tf.one_hot(_true, len(self.active_class_ids)).numpy()
+                    _pred = _true*np.expand_dims(_pred,-1)
                     true.extend(_true)
                     pred.extend(_pred)
                     sample_weight.extend(_sample_weight)
@@ -509,12 +488,12 @@ class MaskRcnn(KM.Model):
             metrics = []
             for conf_thresh in np.arange(0.1,1,0.1):
                 conf_thresh = np.around(conf_thresh,1)
-                metrics.append(tfa.metrics.F1Score(num_classes=len(self.active_class_ids)+1, average=None,threshold=conf_thresh))
+                metrics.append(F1Score(num_classes=len(self.active_class_ids), average='macro',threshold=conf_thresh))
             for  metric_fn in metrics:
                 if true:
                     metric_fn.reset_state()
                     metric_fn.update_state(true, pred, sample_weight)
-                    results.append(tf.reduce_mean(metric_fn.result()[1:]))
+                    results.append(metric_fn.result())
                 else:
                     results.append(0.)
             

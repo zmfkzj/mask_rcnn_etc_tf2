@@ -4,9 +4,9 @@ import tensorflow as tf
 import numpy as np
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
-from MRCNN.metric import CocoMetric, EvalType
 from MRCNN.model import MaskRcnn
 from MRCNN.data.dataset import Dataset
+from MRCNN.model.mask_rcnn import EvalType
 
 
 # tf.config.run_functions_eagerly(True)
@@ -24,7 +24,7 @@ class TestModel(unittest.TestCase):
         dataset = Dataset(json_path=self.train_json_path,
                           image_path=self.train_image_path)
         model = MaskRcnn(config)
-        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
+        active_class_ids = [cat for cat in dataset.coco.cats]
         model.compile(dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
         self.assertTrue(True)
 
@@ -32,7 +32,7 @@ class TestModel(unittest.TestCase):
         config = Config()
         dataset = Dataset(json_path=self.train_json_path,
                           image_path=self.train_image_path)
-        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
+        active_class_ids = [cat for cat in dataset.coco.cats]
         loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
         model = MaskRcnn(config)
         for data in loader:
@@ -47,7 +47,7 @@ class TestModel(unittest.TestCase):
         config = Config()
         dataset = Dataset(json_path=self.train_json_path,
                           image_path=self.train_image_path)
-        active_class_ids = [0]+[cat for cat in dataset.coco.cats]
+        active_class_ids = [cat for cat in dataset.coco.cats]
         loader = DataLoader(config, Mode.TEST, 2, active_class_ids=active_class_ids, dataset=dataset)
         model = MaskRcnn(config).test_model
         for data in loader:
@@ -71,10 +71,10 @@ class TestModel(unittest.TestCase):
         train_dataset = Dataset(self.train_json_path, self.train_image_path)
         val_dataset = Dataset(self.val_json_path, self.val_image_path)
 
-        active_class_ids = [0]+[cat for cat in train_dataset.coco.cats]
+        active_class_ids = [cat for cat in train_dataset.coco.cats]
 
-        train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset)
-        val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
+        train_loader = DataLoader(config, Mode.TRAIN, 3*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset)
+        val_loader = DataLoader(config, Mode.TEST, 12*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
 
         with config.STRATEGY.scope():
             model = MaskRcnn(config)
@@ -86,7 +86,7 @@ class TestModel(unittest.TestCase):
     def test_evaluate(self):
         config = Config()
         val_dataset = Dataset(self.val_json_path, self.val_image_path)
-        active_class_ids = [0]+[cat for cat in val_dataset.coco.cats]
+        active_class_ids = [cat for cat in val_dataset.coco.cats]
         val_loader = DataLoader(config, Mode.TEST, config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
 
         with config.STRATEGY.scope():
