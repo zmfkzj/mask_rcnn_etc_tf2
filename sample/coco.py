@@ -15,7 +15,7 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.0001
+    LEARNING_RATE = 0.001
     TRAIN_IMAGES_PER_GPU = 3
     TEST_IMAGES_PER_GPU = 8
     STEPS_PER_EPOCH = 1000
@@ -47,15 +47,13 @@ augmentations = iaa.Sequential([
 ])
 
 now = datetime.datetime.now().isoformat()
-train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
-                    '/home/tmdocker/host/dataset/coco/train2017/')
-val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
-                    '/home/tmdocker/host/dataset/coco/val2017/')
+train_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json', 
+                    '/home/tmdocker/host/dataset/coco/coco/train2017/')
+val_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json', 
+                    '/home/tmdocker/host/dataset/coco/coco/val2017/')
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
-train_loader = DataLoader(config, Mode.TRAIN, config.TRAIN_BATCH_SIZE, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
-val_loader = DataLoader(config, Mode.TEST,config.TEST_BATCH_SIZE, active_class_ids=active_class_ids, dataset=val_dataset)
 
 if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
@@ -66,14 +64,14 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=0.0005, clipnorm=config.GRADIENT_CLIP_NORM)
     model = MaskRcnn(config)
 
-    model.load_weights('save_2023-02-23T10:51:47.314532/chpt/01-0.0000')
-    # model.set_trainable(TrainLayers.HEADS)
-    model.set_trainable(TrainLayers.ALL)
+    model.set_trainable(TrainLayers.HEADS)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
+train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
 model.fit(iter(train_loader), 
           epochs=300000,
           callbacks=callbacks,
@@ -82,17 +80,19 @@ model.fit(iter(train_loader),
           validation_steps=config.VALIDATION_STEPS)
 
 
-# with config.STRATEGY.scope():
-#     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
-#     model.set_trainable(TrainLayers.ALL)
-#     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+with config.STRATEGY.scope():
+    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.set_trainable(TrainLayers.ALL)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
-# model.fit(iter(train_loader), 
-#           epochs=300000,
-#           callbacks=callbacks,
-#           validation_data=iter(val_loader), 
-#           steps_per_epoch=config.STEPS_PER_EPOCH,
-#           validation_steps=config.VALIDATION_STEPS)
+train_loader = DataLoader(config, Mode.TRAIN, 3, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+val_loader = DataLoader(config, Mode.TEST,8, active_class_ids=active_class_ids, dataset=val_dataset)
+model.fit(iter(train_loader), 
+          epochs=300000,
+          callbacks=callbacks,
+          validation_data=iter(val_loader), 
+          steps_per_epoch=config.STEPS_PER_EPOCH,
+          validation_steps=config.VALIDATION_STEPS)
 
 result = model.evaluate(iter(val_loader),steps=1000)
 print(result)

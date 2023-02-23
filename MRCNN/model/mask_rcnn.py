@@ -274,11 +274,11 @@ class MaskRcnn(KM.Model):
 
 
         # Losses
-        rpn_class_loss = self.rpn_class_loss( input_rpn_match, rpn_class_logits)
-        rpn_bbox_loss = self.rpn_bbox_loss(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
-        class_loss = self.class_loss(target_class_ids, mrcnn_class_logits, active_class_ids)
-        bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox)
-        mask_loss = self.mask_loss(target_mask, target_class_ids, mrcnn_mask)
+        rpn_class_loss = self.rpn_class_loss( input_rpn_match, rpn_class_logits) * self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
+        rpn_bbox_loss = self.rpn_bbox_loss(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size) * self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.)
+        class_loss = self.class_loss(target_class_ids, mrcnn_class_logits, active_class_ids) * self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.)
+        bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox) * self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.)
+        mask_loss = self.mask_loss(target_mask, target_class_ids, mrcnn_mask) * self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.)
 
         # Model
         inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]

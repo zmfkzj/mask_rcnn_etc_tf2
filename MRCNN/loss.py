@@ -38,6 +38,7 @@ class RpnClassLossGraph(KL.Layer):
         # Cross entropy loss
         loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
         loss = tf.where(tf.size(loss) > 0, tf.reduce_mean(loss), tf.constant(0.0))
+        loss = tf.reduce_mean(loss, keepdims=True)
         return loss
 
 
@@ -73,6 +74,7 @@ class RpnBboxLossGraph(KL.Layer):
         loss = self.smooth_l1(target_bbox, rpn_bbox)
         
         loss = tf.where(tf.size(loss) > 0, tf.reduce_mean(loss), tf.constant(0.0))
+        loss = tf.reduce_mean(loss, keepdims=True)
         return loss
 
 
