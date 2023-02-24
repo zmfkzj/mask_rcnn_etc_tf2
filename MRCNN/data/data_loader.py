@@ -195,48 +195,6 @@ class DataLoader:
 
         return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
 
-    @tf.function
-    def preproccessing_train_data_load(self, path, ann_ids):
-        image = self.load_image(path)
-        boxes, masks, dataloader_class_ids =\
-            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
-    
-        resized_image, resized_boxes, minimize_masks, window = \
-            self.resize(image, boxes, masks)
-        rpn_match, rpn_bbox = \
-            self.build_rpn_targets(dataloader_class_ids, resized_boxes)
-
-        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, boxes
-
-    @tf.function
-    def preproccessing_train_augment(self, resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, boxes):
-        if self.augmentations is not None:
-            resized_image, resized_boxes, minimize_masks = \
-                self.augment(resized_image, resized_boxes, minimize_masks)
-        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, boxes
-
-    @tf.function
-    def preproccessing_train_padding(self, resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, boxes):
-        padded_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
-        padded_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
-        padded_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
-
-        instance_count = tf.shape(boxes)[0]
-        if instance_count>self.config.MAX_GT_INSTANCES:
-            indices = tf.random.shuffle(tf.range(instance_count))[:self.config.MAX_GT_INSTANCES]
-            indices = tf.expand_dims(indices,1)
-        else:
-            indices = tf.range(instance_count)
-            indices = tf.expand_dims(indices,1)
-
-        resized_boxes = tf.tensor_scatter_nd_update(padded_box, indices, tf.gather(boxes, tf.squeeze(indices,-1)))
-        minimize_masks = tf.tensor_scatter_nd_update(padded_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
-        dataloader_class_ids = tf.tensor_scatter_nd_update(padded_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
-
-        minimize_masks = tf.transpose(minimize_masks, [1,2,0])
-
-        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
-
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int64)])
     def padding_ann_ids(self, ann_ids):
@@ -423,9 +381,9 @@ class DataLoader:
             x2 = tf.cast(tf.round(b[3]), tf.int64)
 
             m = m[y1:y2, x1:x2]
-            # if tf.size(m) == 0:
-            #     tf.print("mask size is zero")
-            #     tf.errors.INVALID_ARGUMENT
+            if tf.size(m) == 0:
+                tf.print("mask size is zero")
+                tf.errors.INVALID_ARGUMENT
             # tf.cond(tf.size(m) == 0,
             #         lambda: tf.print("Invalid bounding box with area of zero"),
             #         lambda: None)
@@ -488,33 +446,31 @@ class DataLoader:
         rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
         """
         # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
-        rpn_match = tf.zeros([tf.shape(self.anchors)[0]], dtype=tf.int64)
+        rpn_match = tf.zeros([self.anchors.shape[0]], dtype=tf.int32)
         # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
         rpn_bbox = tf.TensorArray(tf.float32, size=self.config.RPN_TRAIN_ANCHORS_PER_IMAGE)
 
         if tf.shape(gt_boxes)[0] == 0:
             rpn_bbox = tf.zeros([self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32)
-            return rpn_match, rpn_bbox
+            return tf.cast(rpn_match,tf.int64), rpn_bbox
 
         # Handle COCO crowds
         # A crowd box in COCO is a bounding box around several instances. Exclude
         # them from training. A crowd box is given a negative class ID.
-        def f_true(gt_class_ids, gt_boxes, crowd_ix):
+        crowd_ix = tf.squeeze(tf.where(gt_class_ids < 0),-1)
+        if tf.shape(crowd_ix)[0] > 0:
             # Filter out crowds from ground truth class IDs and boxes
-            non_crowd_ix = tf.where(gt_class_ids > 0)[...,0]
+            non_crowd_ix = tf.squeeze(tf.where(gt_class_ids > 0),-1)
             crowd_boxes = tf.gather(gt_boxes,crowd_ix)
             gt_class_ids = tf.gather(gt_class_ids,non_crowd_ix)
             gt_boxes = tf.gather(gt_boxes,non_crowd_ix)
             # Compute overlaps with crowd boxes [anchors, crowds]
             crowd_overlaps = compute_overlaps(self.anchors, crowd_boxes)
-            crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
+            crowd_iou_max = tf.cast(tf.reduce_max(crowd_overlaps, axis=1),tf.float32)
             no_crowd_bool = (crowd_iou_max < 0.001)
-            return no_crowd_bool
-
-        crowd_ix = tf.where(gt_class_ids < 0)[...,0]
-        no_crowd_bool = tf.cond(tf.shape(crowd_ix)[0] > 0,
-                                lambda: f_true(gt_class_ids, gt_boxes, crowd_ix) ,
-                                lambda: tf.ones([tf.shape(self.anchors)[0]], dtype=tf.bool))
+        else:
+            # All anchors don't intersect a crowd
+            no_crowd_bool = tf.ones([self.anchors.shape[0]], dtype=tf.bool)
         
         # Compute overlaps [num_anchors, num_gt_boxes]
         overlaps = compute_overlaps(self.anchors, gt_boxes)
@@ -529,42 +485,44 @@ class DataLoader:
         #
         # 1. Set negative anchors first. They get overwritten below if a GT box is
         # matched to them. Skip boxes in crowd areas.
-        anchor_iou_argmax = tf.cast(tf.argmax(overlaps, axis=1), tf.int32)
+        anchor_iou_argmax = tf.argmax(overlaps, axis=1, output_type=tf.int32)
+        
         indices = tf.transpose([tf.range(tf.shape(overlaps)[0]), anchor_iou_argmax])
         anchor_iou_max = tf.gather_nd(overlaps,indices)
-        rpn_match = tf.where((anchor_iou_max < 0.3) & (no_crowd_bool), tf.cast(-1, tf.int64), rpn_match)
+        anchor_iou_max = tf.ensure_shape(anchor_iou_max, [self.anchors.shape[0]])
+        no_crowd_bool = tf.ensure_shape(no_crowd_bool, [self.anchors.shape[0]])
+        rpn_match = tf.where((anchor_iou_max < 0.3) & no_crowd_bool, -1, rpn_match)
         # 2. Set an anchor for each GT box (regardless of IoU value).
         # If multiple anchors have the same IoU match all of them
-        rpn_match = tf.where(tf.reduce_any(overlaps == tf.reduce_max(overlaps, axis=0), axis=1), tf.cast(1,tf.int64), rpn_match)
+        rpn_match = tf.where(tf.reduce_any(overlaps == tf.reduce_max(overlaps, axis=0), axis=1), 1, rpn_match)
 
         # 3. Set anchors with high overlap as positive.
-        rpn_match = tf.where(anchor_iou_max >= 0.7, tf.cast(1,tf.int64), rpn_match) 
+        rpn_match = tf.where(anchor_iou_max >= 0.7, 1, rpn_match) 
 
         # Subsample to balance positive and negative anchors
         # Don't let positives be more than half the anchors
-        ids = tf.where(rpn_match == 1)[...,0]
+        ids = tf.transpose(tf.where(rpn_match == 1))[0]
         extra = tf.shape(ids)[0] - (self.config.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
         if extra > 0:
             # Reset the extra ones to neutral
             ids = tf.random.shuffle(ids)[:extra]
             rpn_match = tf.tensor_scatter_nd_update(rpn_match, 
                                                     tf.expand_dims(ids,1),
-                                                    tf.repeat(tf.cast(0,tf.int64),tf.shape(ids)[0]))
+                                                    tf.zeros([tf.shape(ids)[0]],tf.int32))
 
         # Same for negative proposals
-        ids = tf.where(rpn_match == -1)[...,0]
-        extra = tf.cast(tf.shape(ids)[0],tf.int64) - (self.config.RPN_TRAIN_ANCHORS_PER_IMAGE -
-                            tf.reduce_sum(tf.cast(rpn_match == 1, tf.int64)))
+        ids = tf.transpose(tf.where(rpn_match == -1))[0]
+        extra = tf.shape(ids)[0] - (self.config.RPN_TRAIN_ANCHORS_PER_IMAGE - tf.reduce_sum(tf.cast(rpn_match == 1,tf.int32)))
         if extra > 0:
             # Rest the extra ones to neutral
             ids = tf.random.shuffle(ids)[:extra]
             rpn_match = tf.tensor_scatter_nd_update(rpn_match, 
                                                     tf.expand_dims(ids,1),
-                                                    tf.repeat(tf.cast(0,tf.int64),tf.shape(ids)[0]))
+                                                    tf.zeros([tf.shape(ids)[0]], tf.int32))
 
         # For positive anchors, compute shift and scale needed to transform them
         # to match the corresponding GT boxes.
-        ids = tf.where(rpn_match == 1)[...,0]
+        ids = tf.transpose(tf.where(rpn_match == 1))[0]
         ix = 0  # index into rpn_bbox
         # TODO: use box_refinement() rather than duplicating the code here
         gathered_anchores = tf.cast(tf.gather(self.anchors,ids), tf.float32)
@@ -595,4 +553,4 @@ class DataLoader:
             ix += 1
         rpn_bbox = rpn_bbox.stack()
 
-        return rpn_match, rpn_bbox
+        return tf.cast(rpn_match, tf.int64), rpn_bbox

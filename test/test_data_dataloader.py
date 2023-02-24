@@ -52,7 +52,7 @@ class TestDataLoader(unittest.TestCase):
             # iaa.Multiply(per_channel=True),
             # iaa.GammaContrast(per_channel=True)
         ])
-        loader = DataLoader(config, active_class_ids, Mode.TRAIN, 2, dataset=dataset,augmentations=augmentations)
+        loader = DataLoader(config, Mode.TRAIN, 2,active_class_ids=active_class_ids, dataset=dataset,augmentations=augmentations)
         loader = iter(loader)
         print(next(loader))
         print(next(loader))
@@ -76,10 +76,11 @@ class TestDataLoader(unittest.TestCase):
         dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
                           '/home/tmdocker/host/dataset/5_coco_merge/images')
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = TestDataLoader(config, active_class_ids, Mode.TRAIN, 2, dataset=dataset, shuffle_buffer_size=16)
+        loader = TestDataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids, dataset=dataset)
         dataloader_class_ids = tf.constant(random.choices(active_class_ids,k=100))
         boxes = tf.ones([100,4])
         loader.build_rpn_targets(dataloader_class_ids, boxes)
+
 
     def test_processing_train(self):
         class TestDataLoader(DataLoader):

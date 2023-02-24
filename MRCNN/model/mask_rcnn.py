@@ -129,11 +129,14 @@ class MaskRcnn(KM.Model):
         with tf.GradientTape() as tape:
             rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
                 self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
-        gradients = tape.gradient(self.train_model.losses, self.train_model.trainable_variables)
+
+        reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                        for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
+        
+        losses = [reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+        gradients = tape.gradient(losses, self.train_model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
         
-        reg_losses = self.train_model.losses[0]
-
         return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
 
@@ -285,11 +288,6 @@ class MaskRcnn(KM.Model):
         outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
 
         model = keras.Model(inputs, outputs, name='train_mask_rcnn')
-
-        reg_losses = [keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                        for w in model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name]
-        model.add_loss(lambda: tf.add_n(reg_losses))
-        model.add_loss(outputs)
         return model
 
 

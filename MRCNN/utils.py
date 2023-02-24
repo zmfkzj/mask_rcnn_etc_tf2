@@ -266,6 +266,7 @@ def compute_iou(box, boxes, box_area, boxes_area):
     boxes = tf.cast(boxes, tf.float32)
     box_area = tf.cast(box_area, tf.float32)
     boxes_area = tf.cast(boxes_area, tf.float32)
+
     # Calculate intersection areas
     y1 = tf.maximum(box[0], boxes[:, 0])
     y2 = tf.minimum(box[2], boxes[:, 2])
@@ -290,7 +291,12 @@ def compute_overlaps(boxes1, boxes2):
 
     # Compute overlaps to generate matrix [boxes1 count, boxes2 count]
     # Each cell contains the IoU value.
-    overlaps = tf.vectorized_map(lambda args: compute_iou(args[0], boxes2, args[1], area2),
-                                 [boxes1, area1])
-
+    overlaps = tf.map_fn(lambda args: compute_iou(args[0], boxes1, args[1], area1),
+                         [boxes2, area2],
+                         fn_output_signature=tf.TensorSpec(shape=(None,), dtype=tf.float32))
+    overlaps = tf.transpose(overlaps)
+    # overlaps = tf.zeros((tf.shape(boxes1)[0], tf.shape(boxes2)[0]))
+    # for i in tf.range(tf.shape(overlaps)[1]):
+    #     box2 = boxes2[i]
+    #     overlaps[:, i] = compute_iou(box2, boxes1, area2[i], area1)
     return overlaps

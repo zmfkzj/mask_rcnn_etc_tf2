@@ -13,10 +13,10 @@ from MRCNN.model.mask_rcnn import EvalType
 
 class TestModel(unittest.TestCase):
     def setUp(self) -> None:
-        self.train_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json'
-        self.train_image_path='/home/tmdocker/host/dataset/coco/train2017/'
-        self.val_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json'
-        self.val_image_path='/home/tmdocker/host/dataset/coco/val2017/'
+        self.train_json_path='/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json'
+        self.train_image_path='/home/tmdocker/host/dataset/coco/coco/train2017/'
+        self.val_json_path='/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json'
+        self.val_image_path='/home/tmdocker/host/dataset/coco/coco/val2017/'
 
 
     def test_make_model(self):
@@ -80,7 +80,8 @@ class TestModel(unittest.TestCase):
             model = MaskRcnn(config)
             model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
 
-        model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
+        hist = model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
+        print(hist.history)
 
 
     def test_evaluate(self):

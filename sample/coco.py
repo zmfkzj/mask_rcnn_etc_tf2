@@ -54,7 +54,6 @@ val_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instanc
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
-
 if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
 
@@ -64,7 +63,7 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=0.0005, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, clipnorm=config.GRADIENT_CLIP_NORM)
     model = MaskRcnn(config)
 
     model.set_trainable(TrainLayers.HEADS)
@@ -72,27 +71,30 @@ with config.STRATEGY.scope():
 
 train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
-model.fit(iter(train_loader), 
-          epochs=300000,
+hist = model.fit(iter(train_loader), 
+          epochs=1,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
           validation_steps=config.VALIDATION_STEPS)
 
+last_epoch = len(hist.history['val_mAP'])
+
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 train_loader = DataLoader(config, Mode.TRAIN, 3, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,8, active_class_ids=active_class_ids, dataset=val_dataset)
-model.fit(iter(train_loader), 
+hist = model.fit(iter(train_loader), 
           epochs=300000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS)
+          validation_steps=config.VALIDATION_STEPS,
+          initial_epoch=last_epoch)
 
 result = model.evaluate(iter(val_loader),steps=1000)
 print(result)
