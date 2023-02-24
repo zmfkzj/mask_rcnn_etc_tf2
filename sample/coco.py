@@ -36,7 +36,7 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
                 lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
                 lambda : super_lr)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 50000,0.9,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 50000,0.9,500, staircase=True)
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -47,10 +47,10 @@ augmentations = iaa.Sequential([
 ])
 
 now = datetime.datetime.now().isoformat()
-train_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json', 
-                    '/home/tmdocker/host/dataset/coco/coco/train2017/')
-val_dataset = Dataset('/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json', 
-                    '/home/tmdocker/host/dataset/coco/coco/val2017/')
+train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
+                    '/home/tmdocker/host/dataset/coco/train2017/')
+val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
+                    '/home/tmdocker/host/dataset/coco/val2017/')
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
@@ -72,7 +72,7 @@ with config.STRATEGY.scope():
 train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
 hist = model.fit(iter(train_loader), 
-          epochs=1,
+          epochs=100000,
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,

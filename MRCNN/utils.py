@@ -1,4 +1,5 @@
 from copy import deepcopy
+import math
 
 import numpy as np
 import tensorflow as tf
@@ -140,11 +141,10 @@ def compute_backbone_shapes(config:Config):
     Returns:
         [N, (height, width)]. Where N is the number of stages
     """
-    backbone = deepcopy(config.BACKBONE)(input_shape=list(config.IMAGE_SHAPE), include_top=False)
-
-    output_shapes = list(sorted(set([tuple(layer.output_shape[1:3]) for layer in backbone.layers]), reverse=True))
-    output_shapes = [shape for shape in output_shapes if len(shape)==2 and np.all(config.IMAGE_SHAPE[:2]%np.array(shape)==0) and np.all(np.array(shape)!=1)]
-    return np.array(output_shapes[-4:])
+    return np.array(
+    [[int(math.ceil(config.IMAGE_SHAPE[0] / stride)),
+        int(math.ceil(config.IMAGE_SHAPE[1] / stride))]
+        for stride in config.BACKBONE_STRIDES])
 
 
 def unmold_detections(detections, original_image_shape, image_shape, window, mrcnn_mask=None):

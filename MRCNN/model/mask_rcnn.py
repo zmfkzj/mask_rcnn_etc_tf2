@@ -158,11 +158,11 @@ class MaskRcnn(KM.Model):
         input_window = KL.Input(shape=(4,), name="predict_input_window")
 
         backbone_output = self.backbone(input_image)
-        P3,P4,P5,P6 = self.neck(*backbone_output)
+        P2,P3,P4,P5 = self.neck(*backbone_output)
         
 
-        rpn_feature_maps = [P3, P4, P5, P6]
-        mrcnn_feature_maps = {'2':P3, '3':P4, '4':P5}
+        rpn_feature_maps = [P2, P3, P4, P5]
+        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4}
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -229,12 +229,12 @@ class MaskRcnn(KM.Model):
         input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="train_input_gt_masks", dtype=bool)
 
         backbone_output = self.backbone(input_image)
-        P3,P4,P5,P6 = self.neck(*backbone_output)
+        P2,P3,P4,P5 = self.neck(*backbone_output)
         
 
-        rpn_feature_maps = [P3, P4, P5, P6]
+        rpn_feature_maps = [P2, P3, P4, P5]
         # mrcnn_feature_maps = [P3, P4, P5]
-        mrcnn_feature_maps = {'2':P3, '3':P4, '4':P5}
+        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4}
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
