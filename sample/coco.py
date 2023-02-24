@@ -59,7 +59,7 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10,start_from_epoch=10)]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10)]
 
 
 with config.STRATEGY.scope():
