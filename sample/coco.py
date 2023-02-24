@@ -15,7 +15,7 @@ class TrainConfig(Config):
     GPUS = 0,1
     # GPUS = 0
     NUM_CLASSES = 1+80 
-    LEARNING_RATE = 0.001
+    LEARNING_RATE = 0.0001
     TRAIN_IMAGES_PER_GPU = 3
     TEST_IMAGES_PER_GPU = 8
     STEPS_PER_EPOCH = 1000

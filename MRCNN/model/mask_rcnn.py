@@ -12,6 +12,7 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 import tensorflow_models as tfm
 from pycocotools.cocoeval import COCOeval
+from tensorflow.python.keras.saving.saved_model.utils import no_automatic_dependency_tracking_scope
 
 from MRCNN import utils
 from MRCNN.config import Config
@@ -96,8 +97,10 @@ class MaskRcnn(KM.Model):
         self.train_model = self.make_train_model()
 
         # for evaluation
-        self.val_results = []
+        with no_automatic_dependency_tracking_scope(self):
+            self.val_results = []
         self.param_image_ids = set()
+        
     
 
     def compile(self, dataset:Dataset, eval_type:EvalType, active_class_ids:list[int], iou_thresh: float = 0.5, optimizer="rmsprop", loss=None, metrics=None, loss_weights=None, weighted_metrics=None, run_eagerly=None, steps_per_execution=None, jit_compile=None, **kwargs):
@@ -149,6 +152,8 @@ class MaskRcnn(KM.Model):
         mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
             tf.py_function(self.get_coco_metrics, (), 
                            (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
+        
+        print(self.val_results)
 
         return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
 
@@ -439,14 +444,15 @@ class MaskRcnn(KM.Model):
 
     def get_coco_metrics(self):
         coco = deepcopy(self.dataset.coco)
-        val_results = list(self.val_results)
-        for i, r in enumerate(val_results):
-            val_results[i] = {'image_id':int(r['image_id']),
-                              'category_id':int(r['category_id']),
-                              'bbox':[float(b) for b in r['bbox']],
-                              'score':float(r['score']),
-                              'segmentation':{'size':[int(s) for s in r['segmentation']['size']],
-                                              'counts':r['segmentation']['counts']}}
+        val_results = self.val_results
+        # val_results = list(self.val_results)
+        # for i, r in enumerate(val_results):
+        #     val_results[i] = {'image_id':int(r['image_id']),
+        #                       'category_id':int(r['category_id']),
+        #                       'bbox':[float(b) for b in r['bbox']],
+        #                       'score':float(r['score']),
+        #                       'segmentation':{'size':[int(s) for s in r['segmentation']['size']],
+        #                                       'counts':r['segmentation']['counts']}}
         if val_results:
             coco_results = coco.loadRes(val_results)
 

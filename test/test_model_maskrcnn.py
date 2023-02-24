@@ -13,10 +13,10 @@ from MRCNN.model.mask_rcnn import EvalType
 
 class TestModel(unittest.TestCase):
     def setUp(self) -> None:
-        self.train_json_path='/home/tmdocker/host/dataset/coco/coco/annotations/instances_train2017.json'
-        self.train_image_path='/home/tmdocker/host/dataset/coco/coco/train2017/'
-        self.val_json_path='/home/tmdocker/host/dataset/coco/coco/annotations/instances_val2017.json'
-        self.val_image_path='/home/tmdocker/host/dataset/coco/coco/val2017/'
+        self.train_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json'
+        self.train_image_path='/home/tmdocker/host/dataset/coco/train2017/'
+        self.val_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json'
+        self.val_image_path='/home/tmdocker/host/dataset/coco/val2017/'
 
 
     def test_make_model(self):
