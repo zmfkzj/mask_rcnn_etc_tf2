@@ -63,26 +63,25 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, clipnorm=config.GRADIENT_CLIP_NORM)
     model = MaskRcnn(config)
 
-    model.set_trainable(TrainLayers.HEADS)
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+#     optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+#     model.set_trainable(TrainLayers.HEADS)
+#     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
-train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
-val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
-hist = model.fit(iter(train_loader), 
-          epochs=100000,
-          callbacks=callbacks,
-          validation_data=iter(val_loader), 
-          steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS)
+# train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+# val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
+# hist = model.fit(iter(train_loader), 
+#           epochs=100000,
+#           callbacks=callbacks,
+#           validation_data=iter(val_loader), 
+#           steps_per_epoch=config.STEPS_PER_EPOCH,
+#           validation_steps=config.VALIDATION_STEPS)
 
-last_epoch = len(hist.history['val_mAP'])
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
@@ -93,8 +92,7 @@ hist = model.fit(iter(train_loader),
           callbacks=callbacks,
           validation_data=iter(val_loader), 
           steps_per_epoch=config.STEPS_PER_EPOCH,
-          validation_steps=config.VALIDATION_STEPS,
-          initial_epoch=last_epoch)
+          validation_steps=40)
 
 result = model.evaluate(iter(val_loader),steps=1000)
 print(result)

@@ -77,8 +77,7 @@ class RpnBboxLossGraph(KL.Layer):
 
 
 class MrcnnClassLossGraph(KL.Layer):
-    def call(self, target_class_ids, pred_class_logits,
-                            active_class_ids):
+    def call(self, target_class_ids, pred_class_logits, active_class_ids):
         """Loss for the classifier head of Mask RCNN.
 
         target_class_ids: [batch, num_rois]. Integer class IDs. Uses zero

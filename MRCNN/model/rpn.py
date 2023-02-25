@@ -19,9 +19,6 @@ class RPN(KM.Model):
         # where depth is [x, y, log(w), log(h)]
         self.conv3 = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
 
-        self.rpn_class_logits = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))
-        self.rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))
-        
 
     def call(self, feature_map):
         """Builds the computation graph of Region Proposal Network.

@@ -60,12 +60,16 @@ class DataLoader:
                 .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
                      num_parallel_calls=tf.data.AUTOTUNE)\
 
-            active_class_id_dataset = tf.data.Dataset\
-                .from_tensors(self.active_class_ids)\
+            active_dataloader_class_ids = [0]+[self.dataset.get_dataloader_class_id(id) for id in self.active_class_ids]
+            num_classes = len(coco.dataset['categories'])+1
+            active_classes = [1 if dataloader_class_id in active_dataloader_class_ids else 0 for dataloader_class_id in range(num_classes)]
+
+            active_classes_dataset = tf.data.Dataset\
+                .from_tensors(active_classes)\
                 .repeat()
 
             self.data_loader = tf.data.Dataset\
-                .zip((self.data_loader, active_class_id_dataset))\
+                .zip((self.data_loader, active_classes_dataset))\
                 .map(lambda datas, active_class_id: [*datas, active_class_id],
                      num_parallel_calls=tf.data.AUTOTUNE)\
                 .batch(self.batch_size)\
@@ -109,6 +113,7 @@ class DataLoader:
 
             self.data_loader = tf.data.Dataset\
                 .zip((pathes,img_ids))\
+                .shuffle(len(self.dataset))\
                 .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
                 .batch(self.batch_size)\
                 .map(lambda *datas: [datas],
