@@ -72,7 +72,7 @@ class Config(object):
 
     # Length of square anchor side in pixels
     # RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)
-    RPN_ANCHOR_SCALES = (32, 64, 128, 256)
+    RPN_ANCHOR_SCALES = (32, 96, 288, 608)
 
     # Ratios of anchors at each cell (width/height)
     # A value of 1 represents a square anchor, and 0.5 is a wide anchor
@@ -168,7 +168,7 @@ class Config(object):
 
     # Minimum probability value to accept a detected instance
     # ROIs below this threshold are skipped
-    DETECTION_MIN_CONFIDENCE = 0.0001
+    DETECTION_MIN_CONFIDENCE = 0.
 
     # Non-maximum suppression threshold for detection
     DETECTION_NMS_THRESHOLD = 0.3

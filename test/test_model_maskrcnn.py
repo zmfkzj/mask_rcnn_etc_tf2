@@ -68,12 +68,14 @@ class TestModel(unittest.TestCase):
     
     def test_train(self):
         config = Config()
+        config.GPUS = 0
+        config.GPU_COUNT = 1
         train_dataset = Dataset(self.train_json_path, self.train_image_path)
         val_dataset = Dataset(self.val_json_path, self.val_image_path)
 
         active_class_ids = [cat for cat in train_dataset.coco.cats]
 
-        train_loader = DataLoader(config, Mode.TRAIN, 3*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset)
+        train_loader = DataLoader(config, Mode.TRAIN, 5*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset)
         val_loader = DataLoader(config, Mode.TEST, 12*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
 
         with config.STRATEGY.scope():

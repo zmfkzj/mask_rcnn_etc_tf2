@@ -40,7 +40,7 @@ lr_schedule = CustomScheduler(config.LEARNING_RATE, 50000,0.9,500, staircase=Tru
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
-    iaa.GaussianBlur(),
+    # iaa.GaussianBlur(),
     # iaa.Add(per_channel=True),
     # iaa.Multiply(per_channel=True),
     # iaa.GammaContrast(per_channel=True)
@@ -59,34 +59,34 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10)]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max')]
 
 
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
 
-#     optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
-#     model.set_trainable(TrainLayers.HEADS)
-#     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.set_trainable(TrainLayers.HEADS)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
-# train_loader = DataLoader(config, Mode.TRAIN, 12, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
-# val_loader = DataLoader(config, Mode.TEST,20, active_class_ids=active_class_ids, dataset=val_dataset)
-# hist = model.fit(iter(train_loader), 
-#           epochs=100000,
-#           callbacks=callbacks,
-#           validation_data=iter(val_loader), 
-#           steps_per_epoch=config.STEPS_PER_EPOCH,
-#           validation_steps=config.VALIDATION_STEPS)
+train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
+hist = model.fit(iter(train_loader), 
+          epochs=100000,
+          callbacks=callbacks,
+          validation_data=iter(val_loader), 
+          steps_per_epoch=config.STEPS_PER_EPOCH,
+          validation_steps=40)
 
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=0.00001, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
-train_loader = DataLoader(config, Mode.TRAIN, 3, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
-val_loader = DataLoader(config, Mode.TEST,8, active_class_ids=active_class_ids, dataset=val_dataset)
+train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
 hist = model.fit(iter(train_loader), 
           epochs=300000,
           callbacks=callbacks,
