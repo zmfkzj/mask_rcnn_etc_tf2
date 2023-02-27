@@ -81,9 +81,9 @@ class ProposalLayer(KL.Layer):
         pre_nms_limit = tf.minimum(self.config.PRE_NMS_LIMIT, tf.shape(anchors)[1])
         ix = tf.nn.top_k(scores, pre_nms_limit, sorted=True,
                          name="top_anchors").indices
-        scores = tf.gather(scores, ix, axis=1,batch_dims=1)
-        deltas = tf.gather(deltas, ix, axis=1,batch_dims=1)
-        pre_nms_anchors = tf.gather(anchors,ix,axis=1,batch_dims=1, name="pre_nms_anchors")
+        scores = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (scores, ix))
+        deltas = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (deltas, ix))
+        pre_nms_anchors = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (anchors, ix))
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]

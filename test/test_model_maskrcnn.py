@@ -1,12 +1,14 @@
+from copy import deepcopy
 import unittest
 
 import tensorflow as tf
 import numpy as np
+import keras.api._v2.keras as keras
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
 from MRCNN.model import MaskRcnn
 from MRCNN.data.dataset import Dataset
-from MRCNN.model.mask_rcnn import EvalType
+from MRCNN.model.mask_rcnn import EvalType, TrainLayers
 
 
 # tf.config.run_functions_eagerly(True)
@@ -107,3 +109,29 @@ class TestModel(unittest.TestCase):
             model = MaskRcnn(config)
         results = model.predict(iter(loader),steps=2)
         print(results)
+    
+
+    def test_shared_weight_update(self):
+        config = Config()
+        dataset = Dataset(json_path=self.train_json_path,
+                          image_path=self.train_image_path)
+        active_class_ids = [cat for cat in dataset.coco.cats]
+        loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
+        model = MaskRcnn(config)
+        model.compile(dataset, EvalType.SEGM, active_class_ids, train_layers=TrainLayers.ALL)
+        optimizer = keras.optimizers.Adam(0.0001)
+        for i, data in enumerate(loader):
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            with tf.GradientTape() as tape:
+                losses = model.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids])
+            gradient = tape.gradient(losses, model.train_model.trainable_variables)
+            before_train_model_weight = deepcopy(model.train_model.get_layer('neck').trainable_variables[0])
+            optimizer.apply_gradients(zip(gradient, model.train_model.trainable_variables))
+
+            trained_model_weight = model.train_model.get_layer('neck').trainable_variables[0]
+            test_model_weight = model.predict_test_model.get_layer('neck').trainable_variables[0]
+
+            self.assertTrue(tf.reduce_all(trained_model_weight==test_model_weight))
+            self.assertFalse(tf.reduce_all(trained_model_weight==before_train_model_weight))
+            if i==3:
+                break

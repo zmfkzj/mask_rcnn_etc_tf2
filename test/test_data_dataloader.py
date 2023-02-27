@@ -1,19 +1,28 @@
 import random
 import unittest
+import numpy as np
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
 from MRCNN.data.dataset import Dataset
 import tensorflow as tf
 import imgaug.augmenters as iaa
 from pydantic.dataclasses import dataclass
+import cv2
 
-from MRCNN.utils import compute_backbone_shapes, generate_pyramid_anchors
+from MRCNN.utils import compute_backbone_shapes, generate_pyramid_anchors, unmold_mask
 
 
 # tf.config.run_functions_eagerly(True)
 # tf.data.experimental.enable_debug_mode()
 
 class TestDataLoader(unittest.TestCase):
+    def setUp(self) -> None:
+        self.train_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json'
+        self.train_image_path='/home/tmdocker/host/dataset/coco/train2017/'
+        self.val_json_path='/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json'
+        self.val_image_path='/home/tmdocker/host/dataset/coco/val2017/'
+
+
     def test_make_Dataloader_rcnn_predict(self):
         config = Config()
         dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
@@ -99,3 +108,30 @@ class TestDataLoader(unittest.TestCase):
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
         loader = TestDataLoader(config, active_class_ids, Mode.TRAIN, 2, dataset=dataset, shuffle_buffer_size=16)
         loader.preproccessing_train(dataset.coco.dataset['images'][0]['path'], dataset.coco.getAnnIds(dataset.coco.dataset['images'][0]['id']))
+    
+
+    def test_gt_image_match(self):
+        config = Config()
+        dataset = Dataset(self.val_json_path, 
+                          self.val_image_path)
+        active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
+        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
+        for i, data in enumerate(loader):
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            img = resized_image[0].numpy()[...,::-1]
+            img = np.ascontiguousarray(img, dtype=np.uint8)
+            boxes = np.ascontiguousarray(resized_boxes[0].numpy())
+            masks = np.ascontiguousarray(minimize_masks[0].numpy().transpose([2,0,1]))
+            for box,mask in zip(boxes, masks):
+                if np.any(box!=0):
+                    y1,x1,y2,x2 = np.around(box).astype(np.int32)
+                    mask = mask.astype(np.uint8)
+                    full_mask = np.expand_dims(unmold_mask(mask,box,config.IMAGE_SHAPE),-1)*255
+                    full_mask = np.broadcast_to(full_mask,[*config.IMAGE_SHAPE]).astype(np.uint8)
+                    img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255))
+                    img = cv2.addWeighted(img,0.9, full_mask,0.1,0)
+
+            if i==3:
+                break
+
+

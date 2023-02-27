@@ -31,7 +31,6 @@ class DataLoader:
     active_class_ids:Optional[list[int]] = None
     dataset:Optional[Dataset] = None
     image_pathes:Optional[Union[str,list[str]]] = None
-    data_loader:Optional[tf.data.Dataset] = None
     augmentations:Optional[Sequential] = None
 
     def __post_init__(self):
@@ -136,14 +135,14 @@ class DataLoader:
     @tf.function
     def preprocessing_predict(self, path):
         image = self.load_image(path)
-        resized_image, window, padding = self.resize_image(image)
+        resized_image, window = self.resize_image(image)
         origin_image_shape = tf.shape(image)
         return resized_image, window, origin_image_shape, path
     
     @tf.function
     def preproccessing_test(self, path, img_id):
         image = self.load_image(path)
-        resized_image, window, padding = self.resize_image(image)
+        resized_image, window = self.resize_image(image)
         origin_image_shape = tf.shape(image)
         return resized_image, window, origin_image_shape, img_id
 
@@ -171,7 +170,7 @@ class DataLoader:
         boxes, masks, dataloader_class_ids =\
             tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
     
-        resized_image, resized_boxes, minimize_masks, window = \
+        resized_image, resized_boxes, minimize_masks = \
             self.resize(image, boxes, masks)
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
@@ -192,7 +191,7 @@ class DataLoader:
             indices = tf.range(instance_count)
             indices = tf.expand_dims(indices,1)
 
-        resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(boxes, tf.squeeze(indices,-1)))
+        resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
         minimize_masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
         dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
@@ -237,10 +236,10 @@ class DataLoader:
     @tf.function
     def resize(self, image, bbox, mask):
         origin_shape = tf.shape(image)
-        resized_image, window, padding = self.resize_image(image)
-        resized_bbox = self.resize_box(bbox, origin_shape, window, padding)
+        resized_image, window = self.resize_image(image)
+        resized_bbox = self.resize_box(bbox, origin_shape, window)
         minimize_mask = self.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
-        return resized_image, resized_bbox, minimize_mask, window
+        return resized_image, resized_bbox, minimize_mask
         
 
     @tf.function
@@ -279,7 +278,7 @@ class DataLoader:
         padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
         image = tf.pad(image, padding, mode='constant', constant_values=0)
         window = tf.stack((top_pad, left_pad, h + top_pad, w + left_pad))
-        return image, window, padding
+        return image, window
     
 
     def load_ann(self, ann, image_shape):
@@ -311,21 +310,19 @@ class DataLoader:
 
     @staticmethod
     @tf.function
-    def resize_box(bbox, origin_shape, window,padding):
-        o_h = origin_shape[:2][0]
-        o_w = origin_shape[:2][1]
-        y1 = window[...,0]
-        x1 = window[...,1]
-        y2 = window[...,2]
-        x2 = window[...,3]
+    def resize_box(bboxes, origin_shape, window):
+        origin_shape = tf.cast(origin_shape, tf.float32)
+        window = tf.cast(window, tf.float32)
+        o_h = origin_shape[0]
+        o_w = origin_shape[1]
+        y1 = window[0]
+        x1 = window[1]
+        y2 = window[2]
+        x2 = window[3]
         n_h = y2-y1
         n_w = x2-x1
-        t = padding[0,0]
-        l = padding[1,0]
-        bbox = tf.stack([bbox[...,0],bbox[...,1],bbox[...,2]-bbox[...,0],bbox[...,3]-bbox[...,1]],1)
-        rel_box = bbox / [o_h-1,o_w-1,o_h-1,o_w-1]
-        new_box = rel_box * [n_h-1,n_w-1,n_h-1,n_w-1] + [t,l,0,0]
-        new_box = tf.stack([new_box[...,0],new_box[...,1],new_box[...,0]+new_box[...,2],new_box[...,1]+new_box[...,3]],1)
+        scale = tf.stack([n_h,n_w,n_h,n_w])/tf.stack([o_h,o_w,o_h,o_w])
+        new_box = bboxes * scale + tf.stack([y1,x1,y1,x1])
         return new_box
 
 

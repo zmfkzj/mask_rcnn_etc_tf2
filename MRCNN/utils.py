@@ -226,7 +226,7 @@ def unmold_mask(mask, bbox, image_shape):
     Returns a binary mask with the same size as the original image.
     """
     threshold = 0.5
-    y1, x1, y2, x2 = bbox
+    y1, x1, y2, x2 = np.around(bbox).astype(np.int32)
     mask = cv2.resize(mask, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
     mask = np.where(mask >= threshold, 1, 0).astype(bool)
 
