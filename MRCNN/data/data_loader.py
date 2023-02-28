@@ -363,7 +363,7 @@ class DataLoader:
                 masks = SegmentationMapsOnImage(masks,tuple(shape))
                 image, bbox, masks = self.augmentations(image=image, bounding_boxes=bbi, segmentation_maps=masks)
                 bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
-                masks = masks.get_arr()
+                masks = masks.get_arr().transpose([2,0,1])
             else:
                 image, bbox = self.augmentations(image=image, bounding_boxes=bbi)
                 bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]

@@ -6,7 +6,6 @@ from MRCNN.data.data_loader import DataLoader, Mode
 from MRCNN.data.dataset import Dataset
 import tensorflow as tf
 import imgaug.augmenters as iaa
-from pydantic.dataclasses import dataclass
 import cv2
 
 from MRCNN.utils import compute_backbone_shapes, generate_pyramid_anchors, unmold_mask
@@ -118,8 +117,8 @@ class TestDataLoader(unittest.TestCase):
         augmentations = iaa.Sequential([
             iaa.Fliplr(0.5),
         ])
-        # loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset, augmentations=augmentations)
-        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
+        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset, augmentations=augmentations)
+        # loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
             img = resized_image[0].numpy()[...,::-1]
