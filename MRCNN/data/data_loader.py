@@ -360,9 +360,10 @@ class DataLoader:
             image = image.astype(np.uint8)
             image = augmentor.augment_image(image)
 
-            masks = [SegmentationMapsOnImage(m,tuple(shape)) for m in masks]
-            masks = augmentor.augment_segmentation_maps(masks)
-            masks = np.stack([m.get_arr() for m in masks])
+            if masks.shape[0]>0:
+                masks = [SegmentationMapsOnImage(m,tuple(shape)) for m in masks]
+                masks = augmentor.augment_segmentation_maps(masks)
+                masks = np.stack([m.get_arr() for m in masks])
 
             bbox = bbox[:,[1,0,3,2]]
             bbi = BoundingBoxesOnImage.from_xyxy_array(bbox, shape)
