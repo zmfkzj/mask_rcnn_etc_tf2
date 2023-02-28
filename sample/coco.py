@@ -42,7 +42,7 @@ lr_schedule = CustomScheduler(config.LEARNING_RATE, 50000,0.9,500, staircase=Tru
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
-    # iaa.GaussianBlur(),
+    iaa.GaussianBlur(),
     # iaa.Add(per_channel=True),
     # iaa.Multiply(per_channel=True),
     # iaa.GammaContrast(per_channel=True)
@@ -67,9 +67,8 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
 
-    optimizer = keras.optimizers.Nadam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
-    model.set_trainable(TrainLayers.HEADS)
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+    optimizer = keras.optimizers.Nadam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.HEADS)
 
 train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
@@ -83,9 +82,8 @@ hist = model.fit(iter(train_loader),
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Nadam(learning_rate=0.000005, clipnorm=config.GRADIENT_CLIP_NORM)
-    model.set_trainable(TrainLayers.ALL)
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
+    optimizer = keras.optimizers.Nadam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.ALL)
 
 train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
