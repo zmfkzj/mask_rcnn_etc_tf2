@@ -12,14 +12,16 @@ from MRCNN.model.mask_rcnn import EvalType, MaskRcnn, TrainLayers
 
 
 class TrainConfig(Config):
-    GPUS = 0,1
-    # GPUS = 0
+    # GPUS = 0,1
+    GPUS = 0
     NUM_CLASSES = 1+80 
     LEARNING_RATE = 0.0001
     TRAIN_IMAGES_PER_GPU = 3
     TEST_IMAGES_PER_GPU = 8
     STEPS_PER_EPOCH = 1000
     VALIDATION_STEPS = 20
+    # MAX_GT_INSTANCES = 25
+    # RPN_ANCHOR_SCALES = (64, 256, 448, 640)
     
 
 config = TrainConfig()
@@ -47,10 +49,10 @@ augmentations = iaa.Sequential([
 ])
 
 now = datetime.datetime.now().isoformat()
-train_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_train2017.json', 
-                    '/home/tmdocker/host/dataset/coco/train2017/')
-val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_val2017.json', 
-                    '/home/tmdocker/host/dataset/coco/val2017/')
+train_dataset = Dataset('/home/tmdocker/host/dataset/0_coco/annotations/instances_train.json', 
+                    '/home/tmdocker/host/dataset/0_coco/images/')
+val_dataset = Dataset('/home/tmdocker/host/dataset/0_coco/annotations/instances_test.json', 
+                    '/home/tmdocker/host/dataset/0_coco/images/')
 
 active_class_ids = [cat['id'] for cat in train_dataset.coco.dataset['categories']]
 
@@ -65,7 +67,7 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
 
-    optimizer = keras.optimizers.Adam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Nadam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.HEADS)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
@@ -81,7 +83,7 @@ hist = model.fit(iter(train_loader),
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=0.000005, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Nadam(learning_rate=0.000005, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 

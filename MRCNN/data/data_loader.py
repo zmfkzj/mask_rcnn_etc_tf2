@@ -355,20 +355,18 @@ class DataLoader:
             masks = masks.numpy()
             shape = image.shape[:2]
 
-            augmentor = self.augmentations.to_deterministic()
-
-            image = image.astype(np.uint8)
-            image = augmentor.augment_image(image)
-
-            if masks.shape[0]>0:
-                masks = [SegmentationMapsOnImage(m,tuple(shape)) for m in masks]
-                masks = augmentor.augment_segmentation_maps(masks)
-                masks = np.stack([m.get_arr() for m in masks])
-
             bbox = bbox[:,[1,0,3,2]]
             bbi = BoundingBoxesOnImage.from_xyxy_array(bbox, shape)
-            bbi = augmentor.augment_bounding_boxes(bbi)
-            bbox = bbi.to_xyxy_array()[:,[1,0,3,2]]
+
+            if masks.shape[0]>0:
+                masks = masks.transpose([1,2,0])
+                masks = SegmentationMapsOnImage(masks,tuple(shape))
+                image, bbox, masks = self.augmentations(image=image, bounding_boxes=bbi, segmentation_maps=masks)
+                bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
+                masks = masks.get_arr()
+            else:
+                image, bbox = self.augmentations(image=image, bounding_boxes=bbi)
+                bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
 
             return image,bbox,masks
         
@@ -398,9 +396,6 @@ class DataLoader:
             if tf.size(m) == 0:
                 tf.print("mask size is zero")
                 tf.errors.INVALID_ARGUMENT
-            # tf.cond(tf.size(m) == 0,
-            #         lambda: tf.print("Invalid bounding box with area of zero"),
-            #         lambda: None)
 
             # Resize with bilinear interpolation
             m = tf.expand_dims(m,2)
@@ -410,7 +405,6 @@ class DataLoader:
             m = tf.cast(m, tf.bool)
             return m
         
-        # mini_mask = tf.vectorized_map(f, [mask,bbox], )
         mini_mask = tf.map_fn(f, [mask,bbox],fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool))
         return mini_mask
 
