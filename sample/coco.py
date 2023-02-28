@@ -65,7 +65,7 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor=
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
 
-    optimizer = keras.optimizers.Adam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.HEADS)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
@@ -81,7 +81,7 @@ hist = model.fit(iter(train_loader),
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=0.00001, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=0.000005, clipnorm=config.GRADIENT_CLIP_NORM)
     model.set_trainable(TrainLayers.ALL)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 

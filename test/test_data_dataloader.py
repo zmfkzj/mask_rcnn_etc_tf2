@@ -115,23 +115,30 @@ class TestDataLoader(unittest.TestCase):
         dataset = Dataset(self.val_json_path, 
                           self.val_image_path)
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
+        augmentations = iaa.Sequential([
+            iaa.Fliplr(0.5),
+        ])
+        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset, augmentations=augmentations)
+        # loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
             img = resized_image[0].numpy()[...,::-1]
             img = np.ascontiguousarray(img, dtype=np.uint8)
             boxes = np.ascontiguousarray(resized_boxes[0].numpy())
-            masks = np.ascontiguousarray(minimize_masks[0].numpy().transpose([2,0,1]))
+            masks = np.ascontiguousarray(minimize_masks[0].numpy()).transpose([2,0,1])
+            full_masks = []
             for box,mask in zip(boxes, masks):
                 if np.any(box!=0):
                     y1,x1,y2,x2 = np.around(box).astype(np.int32)
                     mask = mask.astype(np.uint8)
-                    full_mask = np.expand_dims(unmold_mask(mask,box,config.IMAGE_SHAPE),-1)*255
-                    full_mask = np.broadcast_to(full_mask,[*config.IMAGE_SHAPE]).astype(np.uint8)
+                    full_mask = unmold_mask(mask,box,config.IMAGE_SHAPE)
+                    full_masks.append(full_mask)
                     img = cv2.rectangle(img,(x1,y1),(x2,y2),(0,0,255))
-                    img = cv2.addWeighted(img,0.9, full_mask,0.1,0)
+            full_mask = np.any(full_masks,axis=0).astype(np.uint8)
+            full_mask = np.broadcast_to(np.expand_dims(full_mask, -1),[*config.IMAGE_SHAPE])*(0,255,0)
+            img = cv2.addWeighted(img,0.6, full_mask.astype(np.uint8),0.4,0)
 
-            if i==3:
+            if i==10:
                 break
 
 

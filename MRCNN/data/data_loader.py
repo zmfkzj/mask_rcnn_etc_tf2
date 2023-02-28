@@ -7,7 +7,9 @@ from typing import Optional, Union
 import imgaug.augmenters as iaa
 import numpy as np
 import tensorflow as tf
+import cv2
 from imgaug.augmentables.bbs import BoundingBoxesOnImage
+from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 from imgaug.augmenters import Sequential
 from pycocotools import mask as maskUtils
 
@@ -170,14 +172,15 @@ class DataLoader:
         boxes, masks, dataloader_class_ids =\
             tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
     
+        if self.augmentations is not None:
+            image, boxes, masks = \
+                self.augment(image, boxes, masks)
+
         resized_image, resized_boxes, minimize_masks = \
             self.resize(image, boxes, masks)
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
-        if self.augmentations is not None:
-            resized_image, resized_boxes, minimize_masks = \
-                self.augment(resized_image, resized_boxes, minimize_masks)
         
         pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
         pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
@@ -336,11 +339,20 @@ class DataLoader:
 
 
     @tf.function
-    def augment(self, image, bbox, mask):
-        def _augment(image,bbox,mask):
+    def augment(self, image, bbox, masks):
+        def _augment(image,bbox,masks):
+            """
+            Args:
+                image (_type_): (H,W,C)
+                bbox (_type_): (Num_Object, (x1,y1,x2,y2))
+                masks (_type_): (Num_Object,H,W)
+
+            Returns:
+                _type_: _description_
+            """
             image = image.numpy()
             bbox = bbox.numpy()
-            mask = mask.numpy()
+            masks = masks.numpy()
             shape = image.shape[:2]
 
             augmentor = self.augmentations.to_deterministic()
@@ -348,20 +360,19 @@ class DataLoader:
             image = image.astype(np.uint8)
             image = augmentor.augment_image(image)
 
-            mask = mask.astype(np.uint8)
-            mask = np.transpose(mask, [2,0,1])
-            mask = augmentor.augment_images(mask).astype(bool)
-            mask = np.transpose(mask, [1,2,0])
+            masks = [SegmentationMapsOnImage(m,tuple(shape)) for m in masks]
+            masks = augmentor.augment_segmentation_maps(masks)
+            masks = np.stack([m.get_arr() for m in masks])
 
             bbox = bbox[:,[1,0,3,2]]
             bbi = BoundingBoxesOnImage.from_xyxy_array(bbox, shape)
             bbi = augmentor.augment_bounding_boxes(bbi)
             bbox = bbi.to_xyxy_array()[:,[1,0,3,2]]
 
-            return image,bbox,mask
+            return image,bbox,masks
         
         return tf.py_function(_augment, 
-                            [image,bbox,mask],
+                            [image,bbox,masks],
                             (tf.uint8,tf.float32,tf.bool), name='augment')
 
 
