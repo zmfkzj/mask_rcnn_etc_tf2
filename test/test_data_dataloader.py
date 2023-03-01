@@ -68,26 +68,25 @@ class TestDataLoader(unittest.TestCase):
     
 
     def test_build_rpn_targets(self):
-        class TestDataLoader(DataLoader):
-            def __post_init__(self):
-                backbone_shapes = compute_backbone_shapes(self.config)
-                self.anchors = generate_pyramid_anchors(
-                                    self.config.RPN_ANCHOR_SCALES,
-                                    self.config.RPN_ANCHOR_RATIOS,
-                                    backbone_shapes,
-                                    self.config.BACKBONE_STRIDES,
-                                    self.config.RPN_ANCHOR_STRIDE)
-
         config = Config()
-        config.BACKBONE_STRIDES = [2, 4, 8, 16]
-        config.RPN_ANCHOR_SCALES = (16, 32, 64, 128)
-        dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
-                          '/home/tmdocker/host/dataset/5_coco_merge/images')
+        # config.RPN_ANCHOR_SCALES =((32,64), (96,192), (256,384), (512,768))
+        # config.RPN_ANCHOR_RATIOS = [0.5, 1, 2]
+        dataset = Dataset(self.val_json_path, 
+                          self.val_image_path)
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = TestDataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids, dataset=dataset)
-        dataloader_class_ids = tf.constant(random.choices(active_class_ids,k=100))
-        boxes = tf.ones([100,4])
-        loader.build_rpn_targets(dataloader_class_ids, boxes)
+        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
+        for i, data in enumerate(loader):
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            dataloader_class_ids = tf.squeeze(dataloader_class_ids, 0)
+            resized_boxes = tf.squeeze(resized_boxes,0)
+
+            idx = tf.squeeze(tf.where(dataloader_class_ids>0),1)
+            dataloader_class_ids = tf.gather(dataloader_class_ids, idx)
+            resized_boxes = tf.gather(resized_boxes, idx)
+            outputs = loader.build_rpn_targets(dataloader_class_ids, resized_boxes)
+
+            if i==10:
+                break
 
 
     def test_processing_train(self):

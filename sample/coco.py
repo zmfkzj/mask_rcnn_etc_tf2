@@ -61,13 +61,13 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/'+'best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
              keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs'),
-             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max')]
+             keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max')]
 
 
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
 
-    optimizer = keras.optimizers.Nadam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.SGD(learning_rate=0.001, clipnorm=config.GRADIENT_CLIP_NORM,momentum=config.LEARNING_MOMENTUM)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.HEADS)
 
 train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
@@ -82,7 +82,7 @@ hist = model.fit(iter(train_loader),
 
 
 with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Nadam(learning_rate=0.00005, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.SGD(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM,momentum=config.LEARNING_MOMENTUM)
     model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.ALL)
 
 train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)

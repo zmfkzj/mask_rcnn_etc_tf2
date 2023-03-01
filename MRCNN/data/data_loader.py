@@ -286,6 +286,7 @@ class DataLoader:
 
     def load_ann(self, ann, image_shape):
         if (ann['category_id'] not in self.active_class_ids):
+            print(f'{ann["category_id"]} not in {self.active_class_ids}')
             return None
 
         dataloader_class_id = self.dataset.get_dataloader_class_id(ann['category_id'])
@@ -296,6 +297,7 @@ class DataLoader:
         y1, x1, y2, x2 = np.round(box)
         area = (y2-y1)*(x2-x1)
         if area == 0:
+            print(f'area of {ann["bbox"]} is 0')
             return None
 
         h = image_shape[0]
@@ -439,7 +441,7 @@ class DataLoader:
         return m
 
 
-    @tf.function
+    # @tf.function
     def build_rpn_targets(self, gt_class_ids, gt_boxes):
         """Given the anchors and GT boxes, compute overlaps and identify positive
         anchors and deltas to refine them to match their corresponding GT boxes.
