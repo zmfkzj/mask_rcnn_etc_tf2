@@ -17,7 +17,6 @@ from tensorflow.python.keras.saving.saved_model.utils import no_automatic_depend
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.layer.anchors import Anchors
 from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         MrcnnMaskLossGraph, RpnBboxLossGraph,
                         RpnClassLossGraph)
@@ -131,7 +130,7 @@ class MaskRcnn(KM.Model):
             
             losses = [reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
             losses = [loss/self.config.GPU_COUNT for loss in losses]
-        
+
         gradients = tape.gradient(losses, self.train_model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
 
@@ -192,8 +191,6 @@ class MaskRcnn(KM.Model):
         fpn_mask = FPN_mask(self.config.NUM_CLASSES)
 
         anchors = self.get_anchors(self.config.IMAGE_SHAPE)
-        anchors_layer = Anchors(anchors)
-
 
         backbone_output = backbone(input_image)
         P2,P3,P4,P5 = neck(*backbone_output)
@@ -219,7 +216,7 @@ class MaskRcnn(KM.Model):
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
         # and zero padded.
         batch_size = tf.shape(input_image)[0]
-        anchors = anchors_layer(input_image)
+        anchors = tf.broadcast_to(anchors, tf.concat([(batch_size,),tf.shape(anchors)],-1))
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="predict_ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         

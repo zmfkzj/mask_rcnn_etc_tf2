@@ -441,7 +441,7 @@ class DataLoader:
         return m
 
 
-    # @tf.function
+    @tf.function
     def build_rpn_targets(self, gt_class_ids, gt_boxes):
         """Given the anchors and GT boxes, compute overlaps and identify positive
         anchors and deltas to refine them to match their corresponding GT boxes.
