@@ -1,14 +1,21 @@
 from copy import deepcopy
 import unittest
+import cv2
 
 import tensorflow as tf
 import numpy as np
 import keras.api._v2.keras as keras
+import keras.api._v2.keras.layers as KL
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
+from MRCNN.loss import RpnBboxLossGraph
 from MRCNN.model import MaskRcnn
 from MRCNN.data.dataset import Dataset
 from MRCNN.model.mask_rcnn import EvalType, TrainLayers
+from MRCNN.model.neck import Neck
+from MRCNN.model.rpn import RPN
+from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
+from MRCNN.utils import denorm_boxes
 
 
 # tf.config.run_functions_eagerly(True)
@@ -134,4 +141,48 @@ class TestModel(unittest.TestCase):
             self.assertTrue(tf.reduce_all(trained_model_weight==test_model_weight))
             self.assertFalse(tf.reduce_all(trained_model_weight==before_train_model_weight))
             if i==3:
+                break
+
+    
+    def test_rpn_bbox_anchor_match(self):
+        config = Config()
+        config.RPN_ANCHOR_SCALES =((32,64), (96,192), (256,384), (512,768))
+        dataset = Dataset(json_path=self.val_json_path,
+                          image_path=self. val_image_path)
+        active_class_ids = [cat for cat in dataset.coco.cats]
+        loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
+        mrcnn_model = MaskRcnn(config)
+
+        anchors = mrcnn_model.get_anchors(list(config.IMAGE_SHAPE))
+        anchors = denorm_boxes(anchors,list(config.IMAGE_SHAPE)[:2])
+        anchors = tf.where(anchors<0, 0, anchors)
+        anchors = tf.where(anchors>1023, 1023, anchors)
+
+        for i, data in enumerate(loader):
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            resized_boxes = tf.cast(resized_boxes, tf.int32)
+
+            indices = tf.where(tf.equal(rpn_match[0], 1))
+            target_anchors = tf.gather(anchors,indices[:,0])
+
+            img = resized_image[0].numpy()[...,::-1]
+            img = np.ascontiguousarray(img, dtype=np.uint8)
+            for anchor in target_anchors:
+                y1,x1,y2,x2 = anchor.numpy()
+                img = cv2.rectangle(img, (x1,y1),(x2,y2),(0,0,255))
+            
+            for box in resized_boxes[0]:
+                y1,x1,y2,x2 = box.numpy()
+                img = cv2.rectangle(img, (x1,y1),(x2,y2),(0,255,0))
+            
+            # rpn_bbox = rpn_bbox[0]
+            # rpn_bbox = denorm_boxes(rpn_bbox,list(config.IMAGE_SHAPE)[:2])
+            # rpn_bbox = tf.where(rpn_bbox<0, 0, rpn_bbox)
+            # rpn_bbox = tf.where(rpn_bbox>1023, 1023, rpn_bbox)
+            # for rpn_box in rpn_bbox.numpy():
+            #     y1,x1,y2,x2 = rpn_box
+            #     img = cv2.rectangle(img, (x1,y1),(x2,y2),(255,0,0))
+
+
+            if i==10:
                 break

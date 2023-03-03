@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
+from official.vision.ops.iou_similarity import iou
 
 import imgaug.augmenters as iaa
 import numpy as np
@@ -15,7 +16,7 @@ from pycocotools import mask as maskUtils
 
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.utils import (compute_backbone_shapes, compute_overlaps,
+from MRCNN.utils import (compute_backbone_shapes,
                          generate_pyramid_anchors)
 
 
@@ -459,6 +460,7 @@ class DataLoader:
         rpn_match = tf.zeros([self.anchors.shape[0]], dtype=tf.int32)
         # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
         rpn_bbox = tf.TensorArray(tf.float32, size=self.config.RPN_TRAIN_ANCHORS_PER_IMAGE)
+        anchors = tf.cast(self.anchors, tf.float32)
 
         if tf.shape(gt_boxes)[0] == 0:
             rpn_bbox = tf.zeros([self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32)
@@ -475,15 +477,19 @@ class DataLoader:
             gt_class_ids = tf.gather(gt_class_ids,non_crowd_ix)
             gt_boxes = tf.gather(gt_boxes,non_crowd_ix)
             # Compute overlaps with crowd boxes [anchors, crowds]
-            crowd_overlaps = compute_overlaps(self.anchors, crowd_boxes)
+            # crowd_overlaps = compute_overlaps(self.anchors, crowd_boxes)
+            crowd_boxes = tf.ensure_shape(crowd_boxes,[None,4])
+            crowd_overlaps = iou(anchors, crowd_boxes)
             crowd_iou_max = tf.cast(tf.reduce_max(crowd_overlaps, axis=1),tf.float32)
             no_crowd_bool = (crowd_iou_max < 0.001)
         else:
             # All anchors don't intersect a crowd
-            no_crowd_bool = tf.ones([self.anchors.shape[0]], dtype=tf.bool)
+            no_crowd_bool = tf.ones([anchors.shape[0]], dtype=tf.bool)
         
         # Compute overlaps [num_anchors, num_gt_boxes]
-        overlaps = compute_overlaps(self.anchors, gt_boxes)
+        # overlaps = compute_overlaps(anchors, gt_boxes)
+        gt_boxes = tf.ensure_shape(gt_boxes,[None,4])
+        overlaps = iou(anchors, gt_boxes)
 
         # Match anchors to GT Boxes
         # If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
@@ -499,8 +505,8 @@ class DataLoader:
         
         indices = tf.transpose([tf.range(tf.shape(overlaps)[0]), anchor_iou_argmax])
         anchor_iou_max = tf.gather_nd(overlaps,indices)
-        anchor_iou_max = tf.ensure_shape(anchor_iou_max, [self.anchors.shape[0]])
-        no_crowd_bool = tf.ensure_shape(no_crowd_bool, [self.anchors.shape[0]])
+        anchor_iou_max = tf.ensure_shape(anchor_iou_max, [anchors.shape[0]])
+        no_crowd_bool = tf.ensure_shape(no_crowd_bool, [anchors.shape[0]])
         rpn_match = tf.where((anchor_iou_max < 0.3) & no_crowd_bool, -1, rpn_match)
         # 2. Set an anchor for each GT box (regardless of IoU value).
         # If multiple anchors have the same IoU match all of them
@@ -533,12 +539,10 @@ class DataLoader:
         # For positive anchors, compute shift and scale needed to transform them
         # to match the corresponding GT boxes.
         ids = tf.transpose(tf.where(rpn_match == 1))[0]
-        ix = 0  # index into rpn_bbox
         # TODO: use box_refinement() rather than duplicating the code here
-        gathered_anchores = tf.cast(tf.gather(self.anchors,ids), tf.float32)
+        gathered_anchores = tf.cast(tf.gather(anchors,ids), tf.float32)
 
         for i in tf.range(tf.shape(ids)[0]):
-        # for i, a in zip(ids, tf.gather(self.anchors,ids)):
             # Closest gt box (it might have IoU < 0.7)
             gt = gt_boxes[anchor_iou_argmax[ids[i]]]
 
@@ -555,12 +559,11 @@ class DataLoader:
             a_center_x = gathered_anchores[i][1] + 0.5 * a_w
 
             # Compute the bbox refinement that the RPN should predict.
-            rpn_bbox = rpn_bbox.write(ix, tf.stack([(gt_center_y - a_center_y) / a_h, 
+            rpn_bbox = rpn_bbox.write(i, tf.stack([(gt_center_y - a_center_y) / a_h, 
                                                         (gt_center_x - a_center_x) / a_w,
                                                         tf.math.log(gt_h / a_h), 
                                                         tf.math.log(gt_w / a_w),
                                                         ])/self.config.RPN_BBOX_STD_DEV)
-            ix += 1
         rpn_bbox = rpn_bbox.stack()
 
         return tf.cast(rpn_match, tf.int64), rpn_bbox

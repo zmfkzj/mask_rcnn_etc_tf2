@@ -43,7 +43,6 @@ class RPN(KM.Model):
         x = self.conv2(shared)
 
         # Reshape to [batch, anchors, 2]
-        # rpn_class_logits = self.rpn_class_logits(x)
         rpn_class_logits = tf.reshape(x, [tf.shape(x)[0], -1, 2])
 
         # Softmax on last dimension of BG/FG.
@@ -54,7 +53,6 @@ class RPN(KM.Model):
         x = self.conv3(shared)
 
         # Reshape to [batch, anchors, 4]
-        # rpn_bbox = self.rpn_bbox(x)
         rpn_bbox = tf.reshape(x, [tf.shape(x)[0], -1, 4])
 
         return [rpn_class_logits, rpn_probs, rpn_bbox]

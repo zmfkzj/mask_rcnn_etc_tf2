@@ -1,7 +1,6 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from sklearn.preprocessing import OneHotEncoder
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
@@ -9,10 +8,10 @@ import keras.api._v2.keras.models as KM
 import numpy as np
 import pycocotools.mask as maskUtils
 import tensorflow as tf
-import tensorflow_addons as tfa
 import tensorflow_models as tfm
 from pycocotools.cocoeval import COCOeval
-from tensorflow.python.keras.saving.saved_model.utils import no_automatic_dependency_tracking_scope
+from tensorflow.python.keras.saving.saved_model.utils import \
+    no_automatic_dependency_tracking_scope
 
 from MRCNN import utils
 from MRCNN.config import Config
@@ -294,7 +293,7 @@ class MaskRcnn(KM.Model):
     def make_multi_output_backbone(self):
         backbone:KM.Model = self.config.BACKBONE(input_tensor=KL.Input(shape=list(self.config.IMAGE_SHAPE), dtype=tf.float32),
                                                  include_top=False,
-                                                 weights=None)
+                                                 weights='imagenet')
 
         outputs = []
         for i,layer in enumerate(backbone.layers[:-1]):
@@ -364,11 +363,6 @@ class MaskRcnn(KM.Model):
                 backbone_shapes,
                 self.config.BACKBONE_STRIDES,
                 self.config.RPN_ANCHOR_STRIDE)
-            # Keep a copy of the latest anchors in pixel coordinates because
-            # it's used in inspect_model notebooks.
-            # TODO: Remove this after the notebook are refactored to not use it
-            self.anchors = a
-            # Normalize coordinates
             self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[key]
     

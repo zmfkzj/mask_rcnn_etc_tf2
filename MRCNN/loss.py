@@ -96,7 +96,7 @@ class MrcnnClassLossGraph(KL.Layer):
         pred_class_ids = tf.argmax(pred_class_logits, axis=2)
         # TODO: Update this line to work with batch > 1. Right now it assumes all
         #       images in a batch have the same active_class_ids
-        pred_active = tf.gather(active_class_ids[0], pred_class_ids)
+        pred_active = tf.gather(active_class_ids, pred_class_ids,batch_dims=1)
 
         # Loss
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
