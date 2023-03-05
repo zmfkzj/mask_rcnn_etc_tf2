@@ -1,24 +1,23 @@
-from copy import deepcopy
 import unittest
-import cv2
+from copy import deepcopy
 
-import tensorflow as tf
-import numpy as np
+import cv2
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
+import numpy as np
+import tensorflow as tf
+
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
+from MRCNN.data.dataset import Dataset
 from MRCNN.layer.proposal import apply_box_deltas_graph
 from MRCNN.loss import RpnBboxLossGraph
 from MRCNN.model import MaskRcnn
-from MRCNN.data.dataset import Dataset
 from MRCNN.model.mask_rcnn import EvalType, TrainLayers
 from MRCNN.model.neck import Neck
 from MRCNN.model.rpn import RPN
 from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
 from MRCNN.utils import denorm_boxes
-
-
 
 # tf.config.run_functions_eagerly(True)
 

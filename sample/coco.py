@@ -67,8 +67,8 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 with config.STRATEGY.scope():
     model = MaskRcnn(config)
-    model.load_weights('save_2023-03-05T21:04:55.322619/chpt/0/rpn/best')
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids)
+    # model.load_weights('save_2023-03-05T21:04:55.322619/chpt/0/rpn/best')
+    # model.compile(val_dataset,EvalType.SEGM, active_class_ids)
 
 
 count = 0
@@ -76,19 +76,19 @@ while True:
 
     with config.STRATEGY.scope():
         optimizer = keras.optimizers.Nadam(learning_rate=0.00001, clipnorm=config.GRADIENT_CLIP_NORM)
-        model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.RPN_FPN)
+        model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer,train_layers=TrainLayers.RPN)
 
-    callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/{count}/rpn/best',monitor='rpn_bbox_loss',save_best_only=True, save_weights_only=True,mode='min'),
+    callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/{count}/rpn/best',monitor='rpn_class_loss',save_best_only=True, save_weights_only=True,mode='min'),
                 keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/{count}/rpn_train/',),
-                keras.callbacks.EarlyStopping('rpn_bbox_loss',patience=5,verbose=1, mode='min')]
+                keras.callbacks.EarlyStopping('rpn_class_loss',patience=5,verbose=1, mode='min')]
 
-    train_loader = DataLoader(config, Mode.TRAIN, 3*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+    train_loader = DataLoader(config, Mode.TRAIN, 12*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
     val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
     hist = model.fit(iter(train_loader), 
             epochs=300000,
             callbacks=callbacks,
             validation_data=iter(val_loader), 
-            steps_per_epoch=config.STEPS_PER_EPOCH,
+            steps_per_epoch=500,
             validation_steps=40)
 
 
