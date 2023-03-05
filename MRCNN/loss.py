@@ -2,6 +2,7 @@ import tensorflow as tf
 import keras.api._v2.keras as K
 import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
+import numpy as np
 
 from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
 
@@ -37,7 +38,8 @@ class RpnClassLossGraph(KL.Layer):
         anchor_class = tf.gather_nd(anchor_class, indices)
         # Cross entropy loss
         loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
-        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
+        # loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
+        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: np.nan)
         return loss
 
 
@@ -72,7 +74,8 @@ class RpnBboxLossGraph(KL.Layer):
 
         loss = self.smooth_l1(target_bbox, rpn_bbox)
         
-        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0))
+        # loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0))
+        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:np.nan)
         return loss
 
 
@@ -140,7 +143,7 @@ class MrcnnBboxLossGraph(KL.Layer):
         # Smooth-L1 Loss
         loss = tf.cond(tf.size(target_bbox) > 0,
                        lambda: SmoothL1Loss()(y_true=target_bbox, y_pred=pred_bbox),
-                       lambda: tf.constant(0.0))
+                       lambda: np.nan)
         loss = tf.reduce_mean(loss)
         return loss
 
@@ -180,6 +183,6 @@ class MrcnnMaskLossGraph(KL.Layer):
         # shape: [batch, roi, num_classes]
         loss = tf.cond(tf.size(y_true) > 0,
                        lambda: K.losses.binary_crossentropy(y_true, y_pred),
-                       lambda: tf.constant(0.0))
+                       lambda: np.nan)
         loss = tf.reduce_mean(loss)
         return loss

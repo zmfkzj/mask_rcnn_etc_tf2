@@ -8,6 +8,7 @@ import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 from MRCNN.config import Config
 from MRCNN.data.data_loader import DataLoader, Mode
+from MRCNN.layer.proposal import apply_box_deltas_graph
 from MRCNN.loss import RpnBboxLossGraph
 from MRCNN.model import MaskRcnn
 from MRCNN.data.dataset import Dataset
@@ -16,6 +17,7 @@ from MRCNN.model.neck import Neck
 from MRCNN.model.rpn import RPN
 from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
 from MRCNN.utils import denorm_boxes
+
 
 
 # tf.config.run_functions_eagerly(True)
@@ -146,17 +148,16 @@ class TestModel(unittest.TestCase):
     
     def test_rpn_bbox_anchor_match(self):
         config = Config()
-        config.RPN_ANCHOR_SCALES =((32,64), (96,192), (256,384), (512,768))
         dataset = Dataset(json_path=self.val_json_path,
                           image_path=self. val_image_path)
         active_class_ids = [cat for cat in dataset.coco.cats]
         loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
         mrcnn_model = MaskRcnn(config)
 
-        anchors = mrcnn_model.get_anchors(list(config.IMAGE_SHAPE))
-        anchors = denorm_boxes(anchors,list(config.IMAGE_SHAPE)[:2])
-        anchors = tf.where(anchors<0, 0, anchors)
-        anchors = tf.where(anchors>1023, 1023, anchors)
+        origin_anchors = mrcnn_model.get_anchors(list(config.IMAGE_SHAPE))
+        origin_anchors = denorm_boxes(origin_anchors,list(config.IMAGE_SHAPE)[:2])
+        anchors = tf.where(origin_anchors<0, 0, origin_anchors)
+        anchors = tf.where(origin_anchors>1023, 1023, anchors)
 
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
@@ -175,13 +176,14 @@ class TestModel(unittest.TestCase):
                 y1,x1,y2,x2 = box.numpy()
                 img = cv2.rectangle(img, (x1,y1),(x2,y2),(0,255,0))
             
-            # rpn_bbox = rpn_bbox[0]
-            # rpn_bbox = denorm_boxes(rpn_bbox,list(config.IMAGE_SHAPE)[:2])
-            # rpn_bbox = tf.where(rpn_bbox<0, 0, rpn_bbox)
-            # rpn_bbox = tf.where(rpn_bbox>1023, 1023, rpn_bbox)
-            # for rpn_box in rpn_bbox.numpy():
-            #     y1,x1,y2,x2 = rpn_box
-            #     img = cv2.rectangle(img, (x1,y1),(x2,y2),(255,0,0))
+            rpn_bbox = rpn_bbox[0]
+            target_anchors = tf.gather(origin_anchors,indices[:,0])
+            target_rpn_boxes = rpn_bbox[:tf.shape(indices[:,0])[0]]
+            rpn_boxes = apply_box_deltas_graph(tf.cast(target_anchors, tf.float32), 
+                                               target_rpn_boxes * config.RPN_BBOX_STD_DEV)
+            for rpn_box in rpn_boxes.numpy():
+                y1,x1,y2,x2 = np.round(rpn_box).astype(np.int32)
+                img = cv2.rectangle(img, (x1,y1),(x2,y2),(255,0,0))
 
 
             if i==10:

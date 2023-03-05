@@ -3,7 +3,6 @@ import keras.api._v2.keras.layers as KL
 
 from MRCNN.config import Config
 from .proposal import apply_box_deltas_graph, clip_boxes_graph
-from ..model_utils.data_formatting import parse_image_meta_graph
 from ..model_utils.miscellenous_graph import NormBoxesGraph
 from MRCNN import utils
 

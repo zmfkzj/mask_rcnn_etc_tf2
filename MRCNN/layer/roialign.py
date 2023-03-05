@@ -3,7 +3,6 @@ import tensorflow as tf
 import keras.api._v2.keras.layers as KL
 
 from MRCNN.config import Config
-from ..model_utils.data_formatting import parse_image_meta_graph
 
 @tf.function
 def log2_graph(x):
@@ -16,8 +15,7 @@ def pool_feature_maps(feature_maps, roi_level, boxes, pool_shape):
     # Loop through levels and apply ROI pooling to each. P2 to P5.
     pooled = tf.TensorArray(tf.float32, size=len(feature_maps))
     box_to_level = tf.TensorArray(tf.int32, size=len(feature_maps))
-    i = 0
-    for feature in feature_maps:
+    for i, feature in enumerate(feature_maps):
     # for i, level in enumerate(range(2, 2+len(feature_maps))):
         ix = tf.where(tf.equal(roi_level, i+2))
         level_boxes = tf.gather_nd(boxes, ix)
@@ -44,7 +42,6 @@ def pool_feature_maps(feature_maps, roi_level, boxes, pool_shape):
         pooled.write(
             i,
             tf.image.crop_and_resize(**{'image':feature, 'boxes':level_boxes, 'box_indices':box_indices, 'crop_size':pool_shape, 'method':"bilinear"}))
-        i+=1
 
     # Pack pooled features into one tensor
     pooled = pooled.concat()

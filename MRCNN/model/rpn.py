@@ -1,6 +1,7 @@
 import tensorflow as tf
 import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
+import keras.api._v2.keras as keras
 
 
 class RPN(KM.Model):
@@ -11,6 +12,7 @@ class RPN(KM.Model):
         # is not even.
         # Shared convolutional base of the RPN
         self.conv1 = KL.Conv2D(512, (3, 3), padding='same', activation='relu', strides=anchor_stride, name='rpn_conv_shared')
+        self.bn1 = KL.BatchNormalization(name='rpn_shared_bn')
 
         # Anchor Score. [batch, height, width, anchors per location * 2].
         self.conv2 = KL.Conv2D(2 * anchors_per_location, (1, 1), padding='valid', activation='linear', name='rpn_class_raw')
@@ -38,6 +40,8 @@ class RPN(KM.Model):
         # is not even.
         # Shared convolutional base of the RPN
         shared = self.conv1(feature_map)
+        # shared = self.bn1(shared)
+        # shared = KL.ReLU()(shared)
 
         # Anchor Score. [batch, height, width, anchors per location * 2].
         x = self.conv2(shared)
@@ -45,7 +49,7 @@ class RPN(KM.Model):
         # Reshape to [batch, anchors, 2]
         rpn_class_logits = tf.reshape(x, [tf.shape(x)[0], -1, 2])
 
-        # Softmax on last dimension of BG/FG.
+        # # Softmax on last dimension of BG/FG.
         rpn_probs = KL.Activation("softmax", name="rpn_class_xxx")(rpn_class_logits)
 
         # Bounding box refinement. [batch, H, W, anchors per location * depth]

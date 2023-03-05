@@ -20,6 +20,13 @@ class TestComputeBackboneShapes(unittest.TestCase):
         shapes = compute_backbone_shapes(config)
         assert(np.all(shapes == np.array([[256, 256], [128, 128], [ 64,  64], [ 32,  32]])))
 
+    def test_compute_backbone_shapes_ResNet152V2_1024(self):
+        config = Config()
+        config.BACKBONE = keras.applications.ResNet152V2
+        config.IMAGE_SHAPE = np.array([1024, 1024,3])
+        shapes = compute_backbone_shapes(config)
+        assert(np.all(shapes == np.array([[256, 256], [128, 128], [ 64,  64], [ 32,  32]])))
+
     def test_compute_backbone_shapes_EfficientNetB7_1024(self):
         config = Config()
         config.BACKBONE = keras.applications.EfficientNetB7

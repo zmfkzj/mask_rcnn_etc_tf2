@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import re
 from copy import deepcopy
 from enum import Enum
@@ -29,9 +30,13 @@ from . import RPN, FPN_classifier, FPN_mask, Neck
 
 class TrainLayers(Enum):
     META = r"(meta\_.*)"
-    # all layers but the backbone
-    HEADS = r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(meta\_.*)"
-    # All layers
+    RPN = r"(rpn\_.*)"
+    RPN_FPN=r"(rpn\_.*)|(fpn\_.*)"
+    BRANCH = r"(mrcnn\_.*)"
+    HEADS = r"(mrcnn\_.*)|(rpn\_.*)|(meta\_.*)"
+    FPN_P = r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(meta\_.*)"
+    EXC_BRANCH = r'(?!mrcnn\_).*'
+    EXC_RPN = r'(?!rpn\_).*'
     ALL = ".*"
 
 
@@ -40,16 +45,21 @@ class EvalType(Enum):
     SEGM='segm'
 
 
+@dataclass
+class LossWeight:
+    rpn_class_loss:float= 1.
+    rpn_bbox_loss:float = 1.
+    mrcnn_class_loss:float = 1.
+    mrcnn_bbox_loss:float = 1.
+    mrcnn_mask_loss:float = 1.
+    meta_loss:float = 1.
+
+
 class MaskRcnn(KM.Model):
     """Encapsulates the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
     """
-    class Test(keras.Model):
-        def call(self, inputs, training=None, mask=None):
-            cls
-            return super().call(inputs, training, mask)
-
     def __init__(self, config:Config):
         """
         mode: Either "training" or "inference"
@@ -86,9 +96,9 @@ class MaskRcnn(KM.Model):
                 iou_thresh: float = 0.5, 
                 optimizer="rmsprop", 
                 train_layers=TrainLayers.ALL,
+                loss_weights:LossWeight=LossWeight(), 
                 loss=None, 
                 metrics=None, 
-                loss_weights=None, 
                 weighted_metrics=None, 
                 run_eagerly=None, 
                 steps_per_execution=None, 
@@ -99,7 +109,8 @@ class MaskRcnn(KM.Model):
         self.eval_type = eval_type
         self.active_class_ids = active_class_ids
         self.iou_thresh = iou_thresh
-        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
+        self.loss_weights = loss_weights
+        return super().compile(optimizer, loss, metrics, None, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
 
     
     def predict_step(self, data):
@@ -127,14 +138,20 @@ class MaskRcnn(KM.Model):
             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                             for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
-            losses = [reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+            losses = [reg_losses, 
+                      rpn_class_loss    * self.loss_weights.rpn_class_loss, 
+                      rpn_bbox_loss     * self.loss_weights.rpn_bbox_loss, 
+                      class_loss        * self.loss_weights.mrcnn_class_loss, 
+                      bbox_loss         * self.loss_weights.mrcnn_bbox_loss, 
+                      mask_loss         * self.loss_weights.mrcnn_mask_loss]
             losses = [loss/self.config.GPU_COUNT for loss in losses]
 
         gradients = tape.gradient(losses, self.train_model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
 
+        mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = losses
-        return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+        return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
 
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
@@ -192,11 +209,11 @@ class MaskRcnn(KM.Model):
         anchors = self.get_anchors(self.config.IMAGE_SHAPE)
 
         backbone_output = backbone(input_image)
-        P2,P3,P4,P5 = neck(*backbone_output)
+        P2,P3,P4,P5,P6 = neck(*backbone_output)
         
 
-        rpn_feature_maps = [P2, P3, P4, P5]
-        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4}
+        rpn_feature_maps = [P2, P3, P4, P5, P6]
+        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -260,16 +277,11 @@ class MaskRcnn(KM.Model):
         mrcnn_mask = fpn_mask(roi_mask_features)
 
         # Losses
-        rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits) \
-                        * self.config.LOSS_WEIGHTS.get('rpn_class_loss', 1.)
-        rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size) \
-                        * self.config.LOSS_WEIGHTS.get('rpn_bbox_loss', 1.)
-        class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids) \
-                        * self.config.LOSS_WEIGHTS.get('mrcnn_class_loss', 1.)
-        bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox) \
-                        * self.config.LOSS_WEIGHTS.get('mrcnn_bbox_loss', 1.)
-        mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask) \
-                        * self.config.LOSS_WEIGHTS.get('mrcnn_mask_loss', 1.)
+        rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits)
+        rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+        class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
+        bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
+        mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask)
 
         # Model
         train_inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
@@ -295,15 +307,18 @@ class MaskRcnn(KM.Model):
                                                  include_top=False,
                                                  weights='imagenet')
 
+        output_channels = (2048,1024,512,256)
+        output_shapes = compute_backbone_shapes(self.config)[:-1][::-1]
+        output_shapes = list(zip(*zip(*output_shapes), output_channels))
+        idx = 0
         outputs = []
-        for i,layer in enumerate(backbone.layers[:-1]):
-            if (shape:=layer.output_shape[1:3]) != backbone.layers[i+1].output_shape[1:3] \
-                and len(shape)==2 \
-                and tf.reduce_all(self.config.IMAGE_SHAPE[:2]%shape==0) \
-                and tf.reduce_all(shape!=1):
+        for layer in backbone.layers[::-1]:
+            if tuple(layer.output_shape[1:]) == tuple(output_shapes[idx]):
                 outputs.append(layer.output)
-        outputs.append(backbone.layers[-1].output)
-        outputs =outputs[-3:]
+                idx+=1
+            if idx==len(output_shapes):
+                break
+        outputs =outputs[:4][::-1]
 
         model = keras.Model(inputs=backbone.inputs, outputs=outputs)
         return model
