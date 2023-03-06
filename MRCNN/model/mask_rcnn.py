@@ -158,11 +158,11 @@ class MaskRcnn(KM.Model):
                       class_loss        * self.loss_weights.mrcnn_class_loss, 
                       bbox_loss         * self.loss_weights.mrcnn_bbox_loss, 
                       mask_loss         * self.loss_weights.mrcnn_mask_loss]
-            losses = [loss/self.config.GPU_COUNT for loss in losses]
 
         gradients = tape.gradient(losses, self.train_model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
 
+        losses = [loss/self.config.GPU_COUNT for loss in losses]
         mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = losses
         return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
