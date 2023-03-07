@@ -90,24 +90,24 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 with config.STRATEGY.scope():
     model = MaskRcnn(config, Model.MRCNN)
-    model.load_weights('save_2023-03-07T10:47:43.225611/chpt/rpn/best')
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids)
+    # model.load_weights('save_2023-03-07T10:47:43.225611/chpt/rpn/best')
+    # model.compile(val_dataset,EvalType.SEGM, active_class_ids)
 
-    optimizer = keras.optimizers.Nadam(learning_rate=0.0001, clipnorm=config.GRADIENT_CLIP_NORM)
-    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer, train_layers=TrainLayers.EXC_RPN)
+    optimizer = keras.optimizers.Nadam(learning_rate=0.001, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer=optimizer)
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fine_tune/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fine_tune'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=5,verbose=1, mode='max')]
 
-train_loader = DataLoader(config, Mode.TRAIN, 4*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
+train_loader = DataLoader(config, Mode.TRAIN, 5*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST,20*config.GPU_COUNT, active_class_ids=active_class_ids, dataset=val_dataset)
 hist = model.fit(iter(train_loader), 
         epochs=300000,
         callbacks=callbacks,
         validation_data=iter(val_loader), 
         steps_per_epoch=config.STEPS_PER_EPOCH,
-        validation_steps=40)
+        validation_steps=50)
 
 
 

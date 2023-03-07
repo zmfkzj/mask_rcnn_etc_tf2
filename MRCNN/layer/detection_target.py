@@ -62,6 +62,7 @@ class Detection_targets(KL.Layer):
         # Compute overlaps matrix [proposals, gt_boxes]
         overlaps = iou(proposals, gt_boxes)
 
+
         # Compute overlaps with crowd boxes [proposals, crowd_boxes]
         crowd_overlaps = iou(proposals, crowd_boxes)
         crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)

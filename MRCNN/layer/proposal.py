@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import keras.api._v2.keras.layers as KL
+from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.model_utils.miscellenous_graph import denorm_boxes_graph
 
@@ -80,12 +81,14 @@ class ProposalLayer(KL.Layer):
         # Improve performance by trimming to top anchors by score
         # and doing the rest on the smaller subset.
         pre_nms_limit = tf.minimum(self.config.PRE_NMS_LIMIT, tf.shape(anchors)[1])
-        ix = tf.nn.top_k(scores, pre_nms_limit, sorted=True,
-                         name="top_anchors").indices
+        ix = tf.math.top_k(scores, pre_nms_limit, sorted=True, name="top_anchors",).indices
+        # scores = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (scores, ix))
+        # deltas = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (deltas, ix))
+        # pre_nms_anchors = tf.vectorized_map(lambda inputs: tf.gather(*inputs), (anchors, ix))
         scores = tf.gather(scores, ix, batch_dims=1, axis=1)
         deltas = tf.gather(deltas, ix, batch_dims=1, axis=1)
         pre_nms_anchors = tf.gather(anchors, ix, batch_dims=1, axis=1)
-        pre_nms_anchors = tf.cast(denorm_boxes_graph(pre_nms_anchors,list(self.config.IMAGE_SHAPE)[:2]), tf.float32)
+        pre_nms_anchors = tf.cast(tf.vectorized_map(lambda x: denorm_boxes_graph(x,list(self.config.IMAGE_SHAPE)[:2]),pre_nms_anchors), tf.float32)
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
@@ -94,8 +97,7 @@ class ProposalLayer(KL.Layer):
                           fn_output_signature=tf.TensorSpec(shape=(self.config.PRE_NMS_LIMIT, 4), dtype=tf.float32))
 
         # Clip to image boundaries. Since we're in normalized coordinates,
-        # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
-        window = tf.stack([0., 0., 1., 1.])
+        window = tf.stack([0., 0., *list(self.config.IMAGE_SHAPE-1)[:2]])
         boxes = tf.vectorized_map(lambda boxes:clip_boxes_graph(boxes, window),boxes)
 
         # Filter out small boxes
@@ -116,6 +118,7 @@ class ProposalLayer(KL.Layer):
             return proposals
         proposals = tf.map_fn(nms,(boxes, scores),
                               fn_output_signature=tf.TensorSpec(shape=[None,4], dtype=tf.float32))
+        proposals = tf.vectorized_map(lambda p: utils.norm_boxes(p, tuple(self.config.IMAGE_SHAPE[:2])), proposals)
         
         return proposals
 

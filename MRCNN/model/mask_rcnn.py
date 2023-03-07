@@ -92,7 +92,7 @@ class MaskRcnn(KM.Model):
         self.backbone = self.make_backbone_model()
         self.neck = Neck(self.config)
 
-        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_SCALES)*len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
+        self.rpn = RPN(self.config.RPN_ANCHOR_STRIDE, len(self.config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(self.config.POOL_SIZE, name="roi_align_classifier")
         self.ROIAlign_mask = tfm.vision.layers.MultilevelROIAligner(self.config.MASK_POOL_SIZE, name="roi_align_mask")
