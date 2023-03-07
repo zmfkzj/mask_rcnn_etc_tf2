@@ -280,7 +280,10 @@ class MaskRcnn(KM.Model):
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="predict_ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         
-        roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, rpn_rois)
+        _rpn_rois = KL.Lambda(lambda r: 
+                          tf.cast(tf.vectorized_map(lambda x: 
+                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rpn_rois)
+        roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, _rpn_rois)
 
         # Network Heads
         # Proposal classifier and BBox regressor heads
@@ -290,7 +293,10 @@ class MaskRcnn(KM.Model):
         # Create masks for detections
         detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
         # roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        roi_seg_feature = self.ROIAlign_mask(mrcnn_feature_maps, detection_boxes)
+        _detection_boxes = KL.Lambda(lambda r: 
+                          tf.cast(tf.vectorized_map(lambda x: 
+                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(detection_boxes)
+        roi_seg_feature = self.ROIAlign_mask(mrcnn_feature_maps, _detection_boxes)
         mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
 
         model = keras.Model([input_image, input_window],
