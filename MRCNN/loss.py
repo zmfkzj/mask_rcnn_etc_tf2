@@ -19,6 +19,11 @@ class SmoothL1Loss(KL.Layer):
 
 
 class RpnClassLossGraph(KL.Layer):
+    def __init__(self, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
+        super().__init__(trainable, name, dtype, dynamic, **kwargs)
+        self.focal_loss = tf.losses.BinaryFocalCrossentropy(apply_class_balancing=True, from_logits=True, reduction=tf.losses.Reduction.NONE)
+
+
     def call(self, rpn_match, rpn_class_logits):
         """RPN anchor classifier loss.
 
@@ -37,9 +42,9 @@ class RpnClassLossGraph(KL.Layer):
         rpn_class_logits = tf.gather_nd(rpn_class_logits, indices)
         anchor_class = tf.gather_nd(anchor_class, indices)
         # Cross entropy loss
-        loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
-        # anchor_class = tf.one_hot(anchor_class,2)
-        # loss = self.focal_loss(anchor_class, rpn_class_logits)
+        # loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
+        anchor_class = tf.one_hot(anchor_class,2)
+        loss = self.focal_loss(anchor_class, rpn_class_logits)
         loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
         return loss
 
@@ -76,6 +81,7 @@ class RpnBboxLossGraph(KL.Layer):
         loss = self.smooth_l1(target_bbox, rpn_bbox)
         
         loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0))
+        # loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:np.nan)
         return loss
 
 
