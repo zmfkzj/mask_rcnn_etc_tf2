@@ -40,6 +40,14 @@ class TrainLayers(Enum):
     ALL = ".*"
 
 
+class Model(Enum):
+    RPN = 'rpn'
+    MRCNN = 'mrcnn'
+    FRCNN = 'frcnn'
+    META_MRCNN = 'meta_mrcnn'
+    META_FRCNN = 'meta_frcnn'
+
+
 class EvalType(Enum):
     BBOX='bbox'
     SEGM='segm'
@@ -60,7 +68,7 @@ class MaskRcnn(KM.Model):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config):
+    def __init__(self, config:Config, model: Model):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -68,6 +76,7 @@ class MaskRcnn(KM.Model):
         """
         super().__init__(name='mask_rcnn')
         self.config = config
+        self.model = model
         self.strategy = self.config.STRATEGY
 
         h, w = config.IMAGE_SHAPE[:2]
@@ -94,8 +103,8 @@ class MaskRcnn(KM.Model):
         self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
 
         # #excuting models
-        # self.predict_test_model, self.train_model = self.make_models()
-        self.predict_test_model = self.make_predict_model()
+        self.predict_model = self.make_predict_model()
+        self.test_model = self.make_test_model()
         self.train_model = self.make_train_model()
 
         # for evaluation
@@ -128,60 +137,119 @@ class MaskRcnn(KM.Model):
 
     
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, pathes = data[0]
-        detections, mrcnn_mask = self.predict_test_model([input_images, input_window])
+        if self.model==Model.MRCNN:
+            input_images, input_window, origin_image_shapes, pathes = data[0]
+            detections, mrcnn_mask = self.predict_model([input_images, input_window])
+            return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
 
-        return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
+        elif self.model==Model.RPN:
+            input_images, input_window, origin_image_shapes, pathes = data[0]
+            rpn_class, rpn_bbox = self.predict_model([input_images, input_window])
+            return rpn_class, rpn_bbox, origin_image_shapes, input_window, pathes
+
+        else:
+            raise ValueError
 
 
     def test_step(self, data):
-        input_images, input_window, origin_image_shapes, image_ids = data[0]
-        detections, mrcnn_mask = self.predict_test_model([input_images, input_window])
+        if self.model==Model.MRCNN:
+            input_images, input_window, origin_image_shapes, image_ids = data[0]
+            detections, mrcnn_mask = self.test_model([input_images, input_window])
+            tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window, mrcnn_mask), ())
+            return {}
 
-        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window, mrcnn_mask), ())
-        return {}
+        elif self.model==Model.RPN:
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            losses = self.test_model([resized_image, rpn_match, rpn_bbox])
+            rpn_class_loss, rpn_bbox_loss = [loss/self.config.GPU_COUNT for loss in losses]
+            return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss}
+
+        else:
+            raise ValueError
 
 
     def train_step(self, data):
-        resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+        if self.model==Model.MRCNN:
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            with tf.GradientTape() as tape:
+                rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
+                    self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
 
-        with tf.GradientTape() as tape:
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
-                self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
+                reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+                                for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
+                
+                losses = [reg_losses, 
+                        rpn_class_loss    * self.loss_weights.rpn_class_loss, 
+                        rpn_bbox_loss     * self.loss_weights.rpn_bbox_loss, 
+                        class_loss        * self.loss_weights.mrcnn_class_loss, 
+                        bbox_loss         * self.loss_weights.mrcnn_bbox_loss, 
+                        mask_loss         * self.loss_weights.mrcnn_mask_loss]
 
-            reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                            for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
-            
-            losses = [reg_losses, 
-                      rpn_class_loss    * self.loss_weights.rpn_class_loss, 
-                      rpn_bbox_loss     * self.loss_weights.rpn_bbox_loss, 
-                      class_loss        * self.loss_weights.mrcnn_class_loss, 
-                      bbox_loss         * self.loss_weights.mrcnn_bbox_loss, 
-                      mask_loss         * self.loss_weights.mrcnn_mask_loss]
+            gradients = tape.gradient(losses, self.train_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
 
-        gradients = tape.gradient(losses, self.train_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+            losses = [loss/self.config.GPU_COUNT for loss in losses]
+            mean_loss = tf.reduce_mean(losses)
+            reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = losses
+            return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
-        losses = [loss/self.config.GPU_COUNT for loss in losses]
-        mean_loss = tf.reduce_mean(losses)
-        reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = losses
-        return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+        elif self.model==Model.RPN:
+            resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+            with tf.GradientTape() as tape:
+                losses = self.train_model([resized_image, rpn_match, rpn_bbox])
+            gradients = tape.gradient(losses, self.train_model.trainable_variables)
+            self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+
+            rpn_class_loss, rpn_bbox_loss = [loss/self.config.GPU_COUNT for loss in losses]
+            return {'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss}
 
 
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
-        self.param_image_ids.clear()
-        self.val_results.clear()
+        if self.model==Model.MRCNN:
+            self.param_image_ids.clear()
+            self.val_results.clear()
 
-        super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
+            super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
 
-        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
-            tf.py_function(self.get_coco_metrics, (), 
-                           (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
-        
-        return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
+            mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
+                tf.py_function(self.get_coco_metrics, (), 
+                            (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
+            
+            return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
+        elif self.model==Model.RPN:
+            return super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
+        else:
+            ValueError
 
-
+    
     def make_predict_model(self):
+        if self.model==Model.MRCNN:
+            return self._make_mrcnn_predict_test_model()
+        elif self.model==Model.RPN:
+            return self._make_rpn_predict_model()
+        else:
+            raise ValueError
+
+
+    def make_test_model(self):
+        if self.model==Model.MRCNN:
+            return self._make_mrcnn_predict_test_model()
+        elif self.model==Model.RPN:
+            return self._make_rpn_test_train_model()
+        else:
+            raise ValueError
+
+
+    def make_train_model(self):
+        if self.model==Model.MRCNN:
+            return self._make_mrcnn_train_model()
+        elif self.model==Model.RPN:
+            return self._make_rpn_test_train_model()
+        else:
+            raise ValueError
+
+
+    def _make_mrcnn_predict_test_model(self):
         input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='predict_input_image')
         input_window = KL.Input(shape=(4,), name="predict_input_window")
 
@@ -232,11 +300,7 @@ class MaskRcnn(KM.Model):
         return model
     
 
-    def make_test_model(self):
-        return self.make_predict_model()
-    
-
-    def make_train_model(self):
+    def _make_mrcnn_train_model(self):
         input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="train_input_image")
         active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="train_input_class_ids")
         # RPN GT
@@ -311,6 +375,72 @@ class MaskRcnn(KM.Model):
         # Model
         inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
         outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+
+        model = keras.Model(inputs, outputs, name='train_mask_rcnn')
+        return model
+
+
+    def _make_rpn_predict_model(self):
+        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='predict_input_image')
+        input_window = KL.Input(shape=(4,), name="predict_input_window")
+
+        backbone_output = self.backbone(input_image)
+        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        
+        rpn_feature_maps = [P2, P3, P4, P5, P6]
+        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
+
+        # Loop through pyramid layers
+        layer_outputs = []  # list of lists
+        for p in rpn_feature_maps:
+            layer_outputs.append(self.rpn(p))
+        # Concatenate layer outputs
+        # Convert from list of lists of level outputs to list of lists
+        # of outputs across levels.
+        # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
+        outputs = list(zip(*layer_outputs))
+        outputs = [c(list(o)) for o, c in zip(outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
+
+        rpn_class_logits, rpn_class, rpn_bbox = outputs
+
+        model = keras.Model([input_image, input_window],
+                            [rpn_class, rpn_bbox],
+                            name='predict_mask_rcnn')
+        return model
+    
+
+    def _make_rpn_test_train_model(self):
+        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="train_input_image")
+        # RPN GT
+        input_rpn_match = KL.Input( shape=[None, 1], name="train_input_rpn_match", dtype=tf.int64)
+        input_rpn_bbox = KL.Input( shape=[None, 4], name="train_input_rpn_bbox", dtype=tf.float32)
+
+        backbone_output = self.backbone(input_image)
+        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        
+        rpn_feature_maps = [P2, P3, P4, P5, P6]
+
+        # Loop through pyramid layers
+        layer_outputs = []  # list of lists
+        for p in rpn_feature_maps:
+            layer_outputs.append(self.rpn(p))
+        # Concatenate layer outputs
+        # Convert from list of lists of level outputs to list of lists
+        # of outputs across levels.
+        # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
+        outputs = list(zip(*layer_outputs))
+        outputs = [c(list(o)) for o, c in zip(outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
+
+        rpn_class_logits, rpn_class, rpn_bbox = outputs
+        batch_size = tf.shape(input_image)[0]
+
+        # Losses
+        rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits)
+        rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+
+        # Model
+        inputs = [input_image, input_rpn_match, input_rpn_bbox]
+        outputs = [rpn_class_loss, rpn_bbox_loss]
 
         model = keras.Model(inputs, outputs, name='train_mask_rcnn')
         return model
@@ -391,20 +521,15 @@ class MaskRcnn(KM.Model):
     def get_anchors(self, image_shape):
         """Returns anchor pyramid for the given image size."""
         backbone_shapes = compute_backbone_shapes(self.config)
-        # Cache anchors and reuse if image shape is the same
-        if not hasattr(self, "_anchor_cache"):
-            self._anchor_cache = {}
-        key = tuple(image_shape)
-        if not key in self._anchor_cache:
-            # Generate Anchors
-            a = utils.generate_pyramid_anchors(
-                self.config.RPN_ANCHOR_SCALES,
-                self.config.RPN_ANCHOR_RATIOS,
-                backbone_shapes,
-                self.config.BACKBONE_STRIDES,
-                self.config.RPN_ANCHOR_STRIDE)
-            self._anchor_cache[key] = utils.norm_boxes(a, image_shape[:2])
-        return self._anchor_cache[key]
+        # Generate Anchors
+        anchors = utils.generate_pyramid_anchors(
+            self.config.RPN_ANCHOR_SCALES,
+            self.config.RPN_ANCHOR_RATIOS,
+            backbone_shapes,
+            self.config.BACKBONE_STRIDES,
+            self.config.RPN_ANCHOR_STRIDE)
+        norm_anchor = utils.norm_boxes(anchors, image_shape[:2])
+        return norm_anchor
     
 
     def collect_layers(self, model):

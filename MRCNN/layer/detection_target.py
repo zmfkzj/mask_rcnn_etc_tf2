@@ -1,45 +1,15 @@
 import tensorflow as tf
 import tensorflow_models as tfm
+from official.vision.ops.iou_similarity import iou
 import keras.api._v2.keras.layers as KL
 
 from MRCNN.config import Config
 from ..model_utils.miscellenous_graph import trim_zeros_graph
 from MRCNN import utils
 
-class Overlaps(KL.Layer):
-    def call(self, boxes1, boxes2):
-        """Computes IoU overlaps between two sets of boxes.
-        boxes1, boxes2: [N, (y1, x1, y2, x2)].
-        """
-        # 1. Tile boxes2 and repeat boxes1. This allows us to compare
-        # every boxes1 against every boxes2 without loops.
-        # TF doesn't have an equivalent to np.repeat() so simulate it
-        # using tf.tile() and tf.reshape.
-        b1 = tf.reshape(tf.tile(tf.expand_dims(boxes1, 1),
-                                [1, 1, tf.shape(boxes2)[0]]), [-1, 4])
-        b2 = tf.tile(boxes2, [tf.shape(boxes1)[0], 1])
-        # 2. Compute intersections
-        b1_y1, b1_x1, b1_y2, b1_x2 = tf.split(tf.cast(b1, tf.float32), 4, axis=1)
-        b2_y1, b2_x1, b2_y2, b2_x2 = tf.split(b2, 4, axis=1)
-        y1 = tf.maximum(b1_y1, b2_y1)
-        x1 = tf.maximum(b1_x1, b2_x1)
-        y2 = tf.minimum(b1_y2, b2_y2)
-        x2 = tf.minimum(b1_x2, b2_x2)
-        intersection = tf.maximum(x2 - x1, 0) * tf.maximum(y2 - y1, 0)
-        # 3. Compute unions
-        b1_area = (b1_y2 - b1_y1) * (b1_x2 - b1_x1)
-        b2_area = (b2_y2 - b2_y1) * (b2_x2 - b2_x1)
-        union = b1_area + b2_area - intersection
-        # 4. Compute IoU and reshape to [boxes1, boxes2]
-        iou = intersection / union
-        overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])
-        return overlaps
-
-
 class Detection_targets(KL.Layer):
     def __init__(self, config:Config, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
-        self.overlaps_graph = Overlaps()
         self.config = config
 
     def call(self, proposals, gt_class_ids, gt_boxes, gt_masks):
@@ -90,10 +60,10 @@ class Detection_targets(KL.Layer):
         gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
         # Compute overlaps matrix [proposals, gt_boxes]
-        overlaps = self.overlaps_graph(proposals, gt_boxes)
+        overlaps = iou(proposals, gt_boxes)
 
         # Compute overlaps with crowd boxes [proposals, crowd_boxes]
-        crowd_overlaps = self.overlaps_graph(proposals, crowd_boxes)
+        crowd_overlaps = iou(proposals, crowd_boxes)
         crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
         no_crowd_bool = (crowd_iou_max < 0.001)
 

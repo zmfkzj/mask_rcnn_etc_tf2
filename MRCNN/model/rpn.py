@@ -11,15 +11,15 @@ class RPN(KM.Model):
         # TODO: check if stride of 2 causes alignment issues if the feature map
         # is not even.
         # Shared convolutional base of the RPN
-        self.conv1 = KL.Conv2D(512, (3, 3), padding='same', activation='relu', strides=anchor_stride, name='rpn_conv_shared')
-        self.bn1 = KL.BatchNormalization(name='rpn_shared_bn')
+        self.rpn_conv_shared = KL.Conv2D(512, (3, 3), padding='same', activation='relu', strides=anchor_stride, name='rpn_conv_shared')
+        self.rpn_shared_bn = KL.BatchNormalization(name='rpn_shared_bn')
 
         # Anchor Score. [batch, height, width, anchors per location * 2].
-        self.conv2 = KL.Conv2D(2 * anchors_per_location, (1, 1), padding='valid', activation='linear', name='rpn_class_raw')
+        self.rpn_class_raw = KL.Conv2D(2 * anchors_per_location, (1, 1), padding='valid', activation='linear', name='rpn_class_raw')
 
         # Bounding box refinement. [batch, H, W, anchors per location * depth]
         # where depth is [x, y, log(w), log(h)]
-        self.conv3 = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
+        self.rpn_bbox_pred = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
 
 
     def call(self, feature_map):
@@ -39,12 +39,12 @@ class RPN(KM.Model):
         # TODO: check if stride of 2 causes alignment issues if the feature map
         # is not even.
         # Shared convolutional base of the RPN
-        shared = self.conv1(feature_map)
-        # shared = self.bn1(shared)
+        shared = self.rpn_conv_shared(feature_map)
+        # shared = self.rpn_shared_bn(shared)
         # shared = KL.ReLU()(shared)
 
         # Anchor Score. [batch, height, width, anchors per location * 2].
-        x = self.conv2(shared)
+        x = self.rpn_class_raw(shared)
 
         # Reshape to [batch, anchors, 2]
         rpn_class_logits = tf.reshape(x, [tf.shape(x)[0], -1, 2])
@@ -54,7 +54,7 @@ class RPN(KM.Model):
 
         # Bounding box refinement. [batch, H, W, anchors per location * depth]
         # where depth is [x, y, log(w), log(h)]
-        x = self.conv3(shared)
+        x = self.rpn_bbox_pred(shared)
 
         # Reshape to [batch, anchors, 4]
         rpn_bbox = tf.reshape(x, [tf.shape(x)[0], -1, 4])
