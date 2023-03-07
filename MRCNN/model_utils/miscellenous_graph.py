@@ -49,19 +49,20 @@ class NormBoxesGraph(KL.Layer):
         shift = tf.constant([0., 0., 1., 1.])
         return tf.divide(boxes - shift, scale)
 
-@tf.function
-def denorm_boxes_graph(boxes, shape):
-    """Converts boxes from normalized coordinates to pixel coordinates.
-    boxes: [..., (y1, x1, y2, x2)] in normalized coordinates
-    shape: [..., (height, width)] in pixels
 
-    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
-    coordinates it's inside the box.
+class DenormBoxesGraph(KL.Layer):
+    def call(self,boxes, shape):
+        """Converts boxes from normalized coordinates to pixel coordinates.
+        boxes: [..., (y1, x1, y2, x2)] in normalized coordinates
+        shape: [..., (height, width)] in pixels
 
-    Returns:
-        [..., (y1, x1, y2, x2)] in pixel coordinates
-    """
-    h, w = tf.split(tf.cast(shape, tf.float32), 2)
-    scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
-    shift = tf.constant([0., 0., 1., 1.])
-    return tf.cast(tf.round(tf.multiply(boxes, scale) + shift), tf.int64)
+        Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
+        coordinates it's inside the box.
+
+        Returns:
+            [..., (y1, x1, y2, x2)] in pixel coordinates
+        """
+        h, w = tf.split(tf.cast(shape, tf.float32), 2)
+        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
+        shift = tf.constant([0., 0., 1., 1.])
+        return tf.cast(tf.round(tf.multiply(boxes, scale) + shift), tf.int64)

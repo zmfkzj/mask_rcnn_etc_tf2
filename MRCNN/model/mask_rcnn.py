@@ -23,7 +23,7 @@ from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
 from MRCNN.metric import F1Score
 
 from ..layer import DetectionLayer, DetectionTargetLayer, ProposalLayer
-from ..model_utils.miscellenous_graph import NormBoxesGraph
+from ..model_utils.miscellenous_graph import NormBoxesGraph, DenormBoxesGraph
 from ..utils import compute_backbone_shapes, unmold_detections
 from . import RPN, FPN_classifier, FPN_mask, Neck
 
@@ -280,7 +280,6 @@ class MaskRcnn(KM.Model):
         proposal_count = self.config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(nms_threshold=self.config.RPN_NMS_THRESHOLD, name="predict_ROI", config=self.config)([rpn_class, rpn_bbox, anchors, proposal_count])
         
-        # roi_cls_feature = self.ROIAlign_classifier(rpn_rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
         roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, rpn_rois)
 
         # Network Heads
@@ -354,10 +353,12 @@ class MaskRcnn(KM.Model):
         rois, target_class_ids, target_bbox, target_mask =\
             DetectionTargetLayer(self.config, name="train_proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
         
-        # roi_cls_features = self.ROIAlign_classifier(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        # roi_mask_features = self.ROIAlign_mask(rois, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, rois)
-        roi_mask_features = self.ROIAlign_mask(mrcnn_feature_maps, rois)
+
+        _rois = KL.Lambda(lambda r: 
+                          tf.cast(tf.vectorized_map(lambda x: 
+                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rois)
+        roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, _rois)
+        roi_mask_features = self.ROIAlign_mask(mrcnn_feature_maps, _rois)
 
         # Network Heads
         # TODO: verify that this handles zero padded ROIs
