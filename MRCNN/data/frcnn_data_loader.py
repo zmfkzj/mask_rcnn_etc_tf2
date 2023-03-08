@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from pydantic.dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 from official.vision.ops.iou_similarity import iou
@@ -34,11 +34,14 @@ class DataLoader:
                             backbone_shapes,
                             self.config.BACKBONE_STRIDES,
                             self.config.RPN_ANCHOR_STRIDE)
-
+        
         if self.mode in [Mode.TRAIN, Mode.TEST]:
             coco = self.dataset.coco
 
         if self.mode == Mode.TRAIN:
+            if self.active_class_ids is None:
+                self.active_class_ids = [cat['id'] for cat in self.dataset.coco.dataset['categories']]
+
             path = tf.data.Dataset\
                 .from_tensor_slices([img['path'] for img in coco.dataset['images']])
 
@@ -90,7 +93,7 @@ class DataLoader:
                 
             self.data_loader = tf.data.Dataset\
                 .from_tensor_slices(pathes)\
-                .map(self.preprocessing_predict, num_parallel_calls=tf.data.AUTOTUNE)\
+                .map(lambda p: self.preprocessing_predict(p), num_parallel_calls=tf.data.AUTOTUNE)\
                 .batch(self.batch_size)\
                 .map(lambda *datas: [datas],
                      num_parallel_calls=tf.data.AUTOTUNE)\
@@ -117,43 +120,29 @@ class DataLoader:
     def __iter__(self):
         return iter(self.data_loader)
     
-
     def __hash__(self) -> int:
         return hash((tuple(self.active_class_ids) if self.active_class_ids is not None else None, 
                      self.mode, 
                      tuple(self.image_pathes) if self.image_pathes is not None else None, 
                      self.dataset))
 
+    
 
     @tf.function
     def preprocessing_predict(self, path):
         image = self.load_image(path)
-        resized_image, window = self.resize_image(image)
+        resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
+        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
         origin_image_shape = tf.shape(image)
-        return resized_image, window, origin_image_shape, path
+        return preprocessed_image, window, origin_image_shape, path
     
     @tf.function
     def preproccessing_test(self, path, img_id):
         image = self.load_image(path)
-        resized_image, window = self.resize_image(image)
+        resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
+        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
         origin_image_shape = tf.shape(image)
-        return resized_image, window, origin_image_shape, img_id
-
-    def load_gt(self, ann_ids, h, w):
-        ann_ids = ann_ids.numpy()
-        ann_ids = [ann_id for ann_id in ann_ids if ann_id!=0]
-        anns = self.dataset.coco.loadAnns(ann_ids)
-
-        gts = [gt for gt in [self.load_ann(ann, (h,w)) for ann in anns] if gt is not None]
-        if gts:
-            boxes, dataloader_class_ids = list(zip(*gts))
-            
-            boxes = tf.cast(tf.stack(boxes), tf.float32)
-            dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int64)
-        else:
-            boxes = tf.zeros([0,4], dtype=tf.float32)
-            dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
-        return boxes, dataloader_class_ids
+        return preprocessed_image, window, origin_image_shape, img_id
 
     @tf.function
     def preproccessing_train(self, path, ann_ids):
@@ -167,6 +156,9 @@ class DataLoader:
 
         resized_image, resized_boxes = \
             self.resize(image, boxes)
+        
+        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
+
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
@@ -185,7 +177,24 @@ class DataLoader:
         resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
         dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
-        return resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox
+        return preprocessed_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox
+
+
+    def load_gt(self, ann_ids, h, w):
+        ann_ids = ann_ids.numpy()
+        ann_ids = [ann_id for ann_id in ann_ids if ann_id!=0]
+        anns = self.dataset.coco.loadAnns(ann_ids)
+
+        gts = [gt for gt in [self.load_ann(ann, (h,w)) for ann in anns] if gt is not None]
+        if gts:
+            boxes, dataloader_class_ids = list(zip(*gts))
+            
+            boxes = tf.cast(tf.stack(boxes), tf.float32)
+            dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int64)
+        else:
+            boxes = tf.zeros([0,4], dtype=tf.float32)
+            dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
+        return boxes, dataloader_class_ids
 
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int64)])
@@ -224,13 +233,14 @@ class DataLoader:
     @tf.function
     def resize(self, image, bbox):
         origin_shape = tf.shape(image)
-        resized_image, window = self.resize_image(image)
+        resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
         resized_bbox = self.resize_box(bbox, origin_shape, window)
         return resized_image, resized_bbox
         
 
+    @staticmethod
     @tf.function
-    def resize_image(self, image):
+    def resize_image(image, shape):
         """Resizes an image keeping the aspect ratio unchanged.
 
         min_dim: if provided, resizes the image such that it's smaller
@@ -251,17 +261,18 @@ class DataLoader:
         """
         image = tf.ensure_shape(image, [None, None,3])
         image = tf.image.resize(image, 
-                                list(self.config.IMAGE_SHAPE[:2]), 
+                                shape[:2],
                                 preserve_aspect_ratio=True, 
                                 method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
 
+        shape = tf.cast(shape, tf.int32)
         # Get new height and width
         h = tf.shape(image)[0]
         w = tf.shape(image)[1]
-        top_pad = (self.config.IMAGE_MAX_DIM - h) // 2
-        bottom_pad = self.config.IMAGE_MAX_DIM - h - top_pad
-        left_pad = (self.config.IMAGE_MAX_DIM - w) // 2
-        right_pad = self.config.IMAGE_MAX_DIM - w - left_pad
+        top_pad = (shape[0] - h) // 2
+        bottom_pad = shape[0] - h - top_pad
+        left_pad = (shape[1] - w) // 2
+        right_pad = shape[1] - w - left_pad
         padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
         image = tf.pad(image, padding, mode='constant', constant_values=0)
         window = tf.stack((top_pad, left_pad, h + top_pad, w + left_pad))
@@ -269,10 +280,6 @@ class DataLoader:
     
 
     def load_ann(self, ann, image_shape):
-        if (ann['category_id'] not in self.active_class_ids):
-            print(f'{ann["category_id"]} not in {self.active_class_ids}')
-            return None
-
         dataloader_class_id = self.dataset.get_dataloader_class_id(ann['category_id'])
 
         x1,y1,w,h = ann['bbox']

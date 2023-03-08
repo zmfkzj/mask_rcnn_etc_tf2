@@ -39,9 +39,6 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
         resized_image, resized_boxes, minimize_masks = \
             self.resize(image, boxes, masks)
-
-        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
-
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
@@ -64,7 +61,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
         minimize_masks = tf.transpose(minimize_masks, [1,2,0])
 
-        return preprocessed_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
+        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
 
 
     @tf.function
@@ -77,6 +74,10 @@ class DataLoader(frcnn_data_loader.DataLoader):
         
 
     def load_ann(self, ann, image_shape):
+        if (ann['category_id'] not in self.active_class_ids):
+            print(f'{ann["category_id"]} not in {self.active_class_ids}')
+            return None
+
         dataloader_class_id = self.dataset.get_dataloader_class_id(ann['category_id'])
 
         x1,y1,w,h = ann['bbox']

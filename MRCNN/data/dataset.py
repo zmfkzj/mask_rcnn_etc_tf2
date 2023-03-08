@@ -14,6 +14,8 @@ class Dataset:
 
         for img in self.coco.dataset['images']:
             img['path'] = (pathlib.Path(self.image_path) / img['file_name']).as_posix()
+        
+        self.count_each_class_objects()
     
 
     def get_source_class_id(self, dataloader_class_id):
@@ -31,6 +33,13 @@ class Dataset:
     
     def __len__(self):
         return len(self.coco.dataset['images'])
+
+    def count_each_class_objects(self):
+        self.class_count:dict[int,int] = {}
+        for dataset_class_id in self.coco.cats:
+            anns = self.coco.getAnnIds(catIds=dataset_class_id)
+            self.class_count[dataset_class_id] = len(anns)
+        self.min_class_count:int = min(self.class_count.values())
 
 
 

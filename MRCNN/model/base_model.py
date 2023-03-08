@@ -103,18 +103,6 @@ class BaseModel(KM.Model):
 
 
     def make_backbone_model(self):
-
-        input = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name="input_backbone")
-        x = KL.Lambda(lambda y:tf.cast(y, tf.float32), name='cast')(input)
-        x = KL.Lambda(self.config.PREPROCESSING, name='preprocessing')(x)
-        backbone:KM.Model = self.make_multi_output_backbone()
-        xs = backbone(x)
-
-        model = keras.Model(inputs=input, outputs=xs)
-        return model
-    
-
-    def make_multi_output_backbone(self):
         backbone:KM.Model = self.config.BACKBONE(input_tensor=KL.Input(shape=list(self.config.IMAGE_SHAPE), dtype=tf.float32),
                                                  include_top=False,
                                                  weights='imagenet')

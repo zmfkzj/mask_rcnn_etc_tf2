@@ -1,17 +1,23 @@
 import numpy as np
 import tensorflow as tf
 import keras.api._v2.keras as keras
+from pydantic.dataclasses import dataclass
 
 
 # Base Configuration Class
 # Don't use this class directly. Instead, sub-class it and override
 # the configurations you need to change.
 
+
+@dataclass(unsafe_hash=True)
 class Config(object):
     """Base configuration class. For custom configurations, create a
     sub-class that inherits from this one and override properties
     that need to be changed.
     """
+    PRN_IMAGE_SIZE = (224,224)
+    PRN_BATCH_PER_GPU = 1
+
     # Name the configurations. For example, 'COCO', 'Experiment 3', ...etc.
     # Useful if your code needs to do things differently depending on which
     # experiment is running.
