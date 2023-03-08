@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import dataclass
 import math
 
 import numpy as np
@@ -212,7 +213,7 @@ def unmold_detections(detections, original_image_shape, image_shape, window, mrc
         full_masks = np.stack(full_masks, axis=-1)\
             if full_masks else np.empty(original_image_shape[:2] + (0,))
     else:
-        full_mask = None
+        full_masks = None
 
     return boxes, class_ids, scores, full_masks
 
@@ -234,18 +235,12 @@ def unmold_mask(mask, bbox, image_shape):
     full_mask = np.zeros(image_shape[:2], dtype=bool)
     full_mask[y1:y2, x1:x2] = mask
     return full_mask
-    # threshold = 0.5
-    # y1 = bbox[0]
-    # x1 = bbox[1]
-    # y2 = bbox[2]
-    # x2 = bbox[3]
-    # mask = tf.expand_dims(mask, -1)
-    # mask = tf.image.resize(mask, (y2 - y1, x2 - x1), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    # mask = tf.cast(tf.where(mask >= threshold, 1, 0),tf.bool)
-    # mask = tf.squeeze(mask, -1)
 
-    # # Put the mask in the right location.
-    # full_mask = tf.zeros(image_shape[:2], dtype=tf.bool)
-    # indices = tf.transpose(tf.meshgrid(tf.range(y1,y1), tf.range(x1,x2)))
-    # full_mask = tf.tensor_scatter_nd_update(full_mask, indices, mask)
-    # return full_mask
+@dataclass
+class LossWeight:
+    rpn_class_loss:float= 1.
+    rpn_bbox_loss:float = 1.
+    mrcnn_class_loss:float = 1.
+    mrcnn_bbox_loss:float = 1.
+    mrcnn_mask_loss:float = 1.
+    meta_loss:float = 1.

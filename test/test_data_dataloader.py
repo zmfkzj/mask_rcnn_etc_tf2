@@ -1,15 +1,17 @@
 import random
 import unittest
-import numpy as np
-from MRCNN.config import Config
-from MRCNN.data.data_loader import DataLoader, Mode
-from MRCNN.data.dataset import Dataset
-import tensorflow as tf
-import imgaug.augmenters as iaa
+
 import cv2
+import imgaug.augmenters as iaa
+import numpy as np
+import tensorflow as tf
 
-from MRCNN.utils import compute_backbone_shapes, generate_pyramid_anchors, unmold_mask
-
+from MRCNN.config import Config
+from MRCNN.data.dataset import Dataset
+from MRCNN.data.mrcnn_data_loader import DataLoader
+from MRCNN.enums import Mode
+from MRCNN.utils import (compute_backbone_shapes, generate_pyramid_anchors,
+                         unmold_mask)
 
 # tf.config.run_functions_eagerly(True)
 # tf.data.experimental.enable_debug_mode()

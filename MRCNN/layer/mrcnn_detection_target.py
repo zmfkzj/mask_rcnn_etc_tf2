@@ -1,13 +1,14 @@
-import tensorflow as tf
-import tensorflow_models as tfm
-from official.vision.ops.iou_similarity import iou
 import keras.api._v2.keras.layers as KL
+import tensorflow as tf
+from official.vision.ops.iou_similarity import iou
 
-from MRCNN.config import Config
-from ..model_utils.miscellenous_graph import trim_zeros_graph
 from MRCNN import utils
+from MRCNN.config import Config
 
-class Detection_targets(KL.Layer):
+from ..model_utils.miscellenous_graph import trim_zeros_graph
+
+
+class Detectiontargets(KL.Layer):
     def __init__(self, config:Config, trainable=True, name=None, dtype=None, dynamic=False, **kwargs):
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
         self.config = config
@@ -182,7 +183,7 @@ class DetectionTargetLayer(KL.Layer):
     def __init__(self, config: Config, **kwargs):
         super(DetectionTargetLayer, self).__init__(**kwargs)
         self.config = config
-        self.detection_targets_graph = Detection_targets(config)
+        self.detection_targets_graph = Detectiontargets(config)
 
     def call(self, inputs):
         proposals = inputs[0]

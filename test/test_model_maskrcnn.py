@@ -3,19 +3,15 @@ from copy import deepcopy
 
 import cv2
 import keras.api._v2.keras as keras
-import keras.api._v2.keras.layers as KL
 import numpy as np
 import tensorflow as tf
 
 from MRCNN.config import Config
-from MRCNN.data.data_loader import DataLoader, Mode
+from MRCNN.data.mrcnn_data_loader import DataLoader
+from MRCNN.enums import Mode,EvalType, TrainLayers
 from MRCNN.data.dataset import Dataset
 from MRCNN.layer.proposal import apply_box_deltas_graph
-from MRCNN.loss import RpnBboxLossGraph
 from MRCNN.model import MaskRcnn
-from MRCNN.model.mask_rcnn import EvalType, TrainLayers
-from MRCNN.model.neck import Neck
-from MRCNN.model.rpn import RPN
 from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
 from MRCNN.utils import denorm_boxes
 
@@ -35,7 +31,7 @@ class TestModel(unittest.TestCase):
                           image_path=self.train_image_path)
         model = MaskRcnn(config)
         active_class_ids = [cat for cat in dataset.coco.cats]
-        model.compile(dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
+        model.compile(dataset, active_class_ids,optimizer='adam')
         self.assertTrue(True)
 
     def test_run_train_model(self):
@@ -90,7 +86,7 @@ class TestModel(unittest.TestCase):
 
         with config.STRATEGY.scope():
             model = MaskRcnn(config)
-            model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
+            model.compile(val_dataset, active_class_ids,optimizer='adam')
 
         hist = model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
         print(hist.history)
@@ -104,7 +100,7 @@ class TestModel(unittest.TestCase):
 
         with config.STRATEGY.scope():
             model = MaskRcnn(config)
-            model.compile(val_dataset,EvalType.SEGM, active_class_ids,optimizer='adam')
+            model.compile(val_dataset, active_class_ids,optimizer='adam')
 
         results = model.evaluate(iter(val_loader), steps=2)
         print(results)
@@ -126,7 +122,7 @@ class TestModel(unittest.TestCase):
         active_class_ids = [cat for cat in dataset.coco.cats]
         loader = DataLoader(config, Mode.TRAIN, 2, active_class_ids=active_class_ids,dataset=dataset)
         model = MaskRcnn(config)
-        model.compile(dataset, EvalType.SEGM, active_class_ids, train_layers=TrainLayers.ALL)
+        model.compile(dataset, active_class_ids, train_layers=TrainLayers.ALL)
         optimizer = keras.optimizers.Adam(0.0001)
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]

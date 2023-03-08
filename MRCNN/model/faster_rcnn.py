@@ -6,17 +6,15 @@ import tensorflow_models as tfm
 from MRCNN.config import Config
 from MRCNN.enums import EvalType
 from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
-                        MrcnnMaskLossGraph, RpnBboxLossGraph,
-                        RpnClassLossGraph)
+                        RpnBboxLossGraph, RpnClassLossGraph)
 from MRCNN.model.base_model import BaseModel, Model
-from MRCNN.model.faster_rcnn import FasterRcnn
 
-from ..layer import DetectionLayer, MrcnnTarget, ProposalLayer
+from ..layer import DetectionLayer, FrcnnTarget, ProposalLayer
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
-from . import FPN_mask
+from . import RPN, FPN_classifier, Neck
 
 
-class MaskRcnn(FasterRcnn):
+class FasterRcnn(BaseModel):
     """Encapsulates the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
@@ -27,32 +25,35 @@ class MaskRcnn(FasterRcnn):
         config: A Sub-class of the Config class
         model_dir: Directory to save training logs and trained weights
         """
-        super(BaseModel, self).__init__(name='mask_rcnn')
+        super(BaseModel, self).__init__(name='faster_rcnn')
 
         #additional parts
-        self.ROIAlign_mask = tfm.vision.layers.MultilevelROIAligner(config.MASK_POOL_SIZE, name="roi_align_mask")
-        self.fpn_mask = FPN_mask(config.NUM_CLASSES)
-        super().__init__(config,EvalType.SEGM)
+        self.neck = Neck(config)
+        self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
+
+        self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
+        self.fpn_classifier = FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
+        super().__init__(config, EvalType.BBOX)
 
     
     def predict_step(self, data):
         input_images, input_window, origin_image_shapes, pathes = data[0]
-        detections, mrcnn_mask = self.predict_model([input_images, input_window])
-        return detections,mrcnn_mask,origin_image_shapes, input_window, pathes
+        detections = self.predict_model([input_images, input_window])
+        return detections,origin_image_shapes, input_window, pathes
 
 
     def test_step(self, data):
         input_images, input_window, origin_image_shapes, image_ids = data[0]
-        detections, mrcnn_mask = self.test_model([input_images, input_window])
-        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window, mrcnn_mask), ())
+        detections = self.test_model([input_images, input_window])
+        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window), ())
         return {}
 
 
     def train_step(self, data):
-        resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
+        resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
         with tf.GradientTape() as tape:
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = \
-                self.train_model([resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
+            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss = \
+                self.train_model([resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
 
             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
                             for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
@@ -61,16 +62,15 @@ class MaskRcnn(FasterRcnn):
                     rpn_class_loss    * self.loss_weights.rpn_class_loss, 
                     rpn_bbox_loss     * self.loss_weights.rpn_bbox_loss, 
                     class_loss        * self.loss_weights.mrcnn_class_loss, 
-                    bbox_loss         * self.loss_weights.mrcnn_bbox_loss, 
-                    mask_loss         * self.loss_weights.mrcnn_mask_loss]
+                    bbox_loss         * self.loss_weights.mrcnn_bbox_loss]
 
         gradients = tape.gradient(losses, self.train_model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
 
         losses = [loss/self.config.GPU_COUNT for loss in losses]
         mean_loss = tf.reduce_mean(losses)
-        reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss = losses
-        return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'mask_loss':mask_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+        reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss = losses
+        return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
 
     def make_predict_model(self):
@@ -112,20 +112,11 @@ class MaskRcnn(FasterRcnn):
         # Network Heads
         # Proposal classifier and BBox regressor heads
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
-        detections = DetectionLayer(self.config, name="predict_mrcnn_detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
-
-        # Create masks for detections
-        detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
-        # roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
-        _detection_boxes = KL.Lambda(lambda r: 
-                          tf.cast(tf.vectorized_map(lambda x: 
-                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(detection_boxes)
-        roi_seg_feature = self.ROIAlign_mask(mrcnn_feature_maps, _detection_boxes)
-        mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
+        detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
 
         model = keras.Model([input_image, input_window],
-                            [detections, mrcnn_mask],
-                            name='predict_mask_rcnn')
+                            detections,
+                            name='predict_model')
         return model
 
     
@@ -148,9 +139,6 @@ class MaskRcnn(FasterRcnn):
         input_gt_boxes = KL.Input( shape=[None, 4], name="train_input_gt_boxes", dtype=tf.float32)
         # Normalize coordinates
         gt_boxes = NormBoxesGraph()(input_gt_boxes, tf.shape(input_image)[1:3])
-        # 3. GT Masks (zero padded)
-        # [batch, height, width, MAX_GT_INSTANCES]
-        input_gt_masks = KL.Input( shape=[self.config.MINI_MASK_SHAPE[0], self.config.MINI_MASK_SHAPE[1], None], name="train_input_gt_masks", dtype=bool)
 
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
@@ -184,20 +172,18 @@ class MaskRcnn(FasterRcnn):
         # Subsamples proposals and generates target outputs for training
         # Note that proposal class IDs, gt_boxes, and gt_masks are zero
         # padded. Equally, returned rois and targets are zero padded.
-        rois, target_class_ids, target_bbox, target_mask =\
-            MrcnnTarget(self.config, name="train_proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+        rois, target_class_ids, target_bbox =\
+            FrcnnTarget(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes])
         
 
         _rois = KL.Lambda(lambda r: 
                           tf.cast(tf.vectorized_map(lambda x: 
                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rois)
         roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, _rois)
-        roi_mask_features = self.ROIAlign_mask(mrcnn_feature_maps, _rois)
 
         # Network Heads
         # TODO: verify that this handles zero padded ROIs
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_features)
-        mrcnn_mask = self.fpn_mask(roi_mask_features)
 
 
         # Losses
@@ -205,11 +191,10 @@ class MaskRcnn(FasterRcnn):
         rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
         class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
         bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
-        mask_loss = MrcnnMaskLossGraph(name="mrcnn_mask_loss")(target_mask, target_class_ids, mrcnn_mask)
 
         # Model
-        inputs = [input_image, input_gt_boxes, input_gt_masks, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
-        outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+        inputs = [input_image, input_gt_boxes, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
+        outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss]
 
-        model = keras.Model(inputs, outputs, name='train_mask_rcnn')
+        model = keras.Model(inputs, outputs, name='train_model')
         return model

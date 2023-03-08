@@ -1,4 +1,5 @@
 from .detection import DetectionLayer
-from .detection_target import DetectionTargetLayer
+from .mrcnn_detection_target import DetectionTargetLayer as MrcnnTarget
+from .frcnn_detection_target import DetectionTargetLayer as FrcnnTarget
 from .proposal import ProposalLayer
 from .roialign import PyramidROIAlign

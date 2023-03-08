@@ -1,29 +1,19 @@
 import os
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 from official.vision.ops.iou_similarity import iou
 
-import imgaug.augmenters as iaa
 import numpy as np
 import tensorflow as tf
-import cv2
 from imgaug.augmentables.bbs import BoundingBoxesOnImage
-from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 from imgaug.augmenters import Sequential
-from pycocotools import mask as maskUtils
 
 from MRCNN.config import Config
+from MRCNN.enums import Mode
 from MRCNN.data.dataset import Dataset
 from MRCNN.utils import (compute_backbone_shapes,
                          generate_pyramid_anchors)
-
-
-class Mode(Enum):
-    PREDICT = 'predict'
-    TEST = 'test'
-    TRAIN = 'train'
 
 
 @dataclass
@@ -156,35 +146,32 @@ class DataLoader:
 
         gts = [gt for gt in [self.load_ann(ann, (h,w)) for ann in anns] if gt is not None]
         if gts:
-            boxes, masks, dataloader_class_ids = list(zip(*gts))
+            boxes, dataloader_class_ids = list(zip(*gts))
             
             boxes = tf.cast(tf.stack(boxes), tf.float32)
-            masks = tf.cast(tf.stack(masks), tf.bool)
             dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int64)
         else:
             boxes = tf.zeros([0,4], dtype=tf.float32)
-            masks = tf.zeros([0,h,w], dtype=tf.bool)
             dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
-        return boxes, masks, dataloader_class_ids
+        return boxes, dataloader_class_ids
 
     @tf.function
     def preproccessing_train(self, path, ann_ids):
         image = self.load_image(path)
-        boxes, masks, dataloader_class_ids =\
-            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
+        boxes, dataloader_class_ids =\
+            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.int64))
     
         if self.augmentations is not None:
-            image, boxes, masks = \
-                self.augment(image, boxes, masks)
+            image, boxes = \
+                self.augment(image, boxes)
 
-        resized_image, resized_boxes, minimize_masks = \
-            self.resize(image, boxes, masks)
+        resized_image, resized_boxes = \
+            self.resize(image, boxes)
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
         
         pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
-        pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
         pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
 
         instance_count = tf.shape(boxes)[0]
@@ -196,12 +183,9 @@ class DataLoader:
             indices = tf.expand_dims(indices,1)
 
         resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
-        minimize_masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimize_masks, tf.squeeze(indices,-1)))
         dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
-        minimize_masks = tf.transpose(minimize_masks, [1,2,0])
-
-        return resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
+        return resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox
 
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int64)])
@@ -238,12 +222,11 @@ class DataLoader:
     
 
     @tf.function
-    def resize(self, image, bbox, mask):
+    def resize(self, image, bbox):
         origin_shape = tf.shape(image)
         resized_image, window = self.resize_image(image)
         resized_bbox = self.resize_box(bbox, origin_shape, window)
-        minimize_mask = self.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
-        return resized_image, resized_bbox, minimize_mask
+        return resized_image, resized_bbox
         
 
     @tf.function
@@ -303,7 +286,6 @@ class DataLoader:
 
         h = image_shape[0]
         w = image_shape[1]
-        mask = self.annToMask(ann, h, w)
 
         if ann['iscrowd']:
             # Use negative class ID for crowds
@@ -311,7 +293,7 @@ class DataLoader:
             # For crowd masks, annToMask() sometimes returns a mask
             # smaller than the given dimensions. If so, resize it.
 
-        return box, mask, dataloader_class_id
+        return box, dataloader_class_id
 
 
     @staticmethod
@@ -342,8 +324,8 @@ class DataLoader:
 
 
     @tf.function
-    def augment(self, image, bbox, masks):
-        def _augment(image,bbox,masks):
+    def augment(self, image, bbox):
+        def _augment(image,bbox):
             """
             Args:
                 image (_type_): (H,W,C)
@@ -355,91 +337,19 @@ class DataLoader:
             """
             image = image.numpy()
             bbox = bbox.numpy()
-            masks = masks.numpy()
             shape = image.shape[:2]
 
             bbox = bbox[:,[1,0,3,2]]
             bbi = BoundingBoxesOnImage.from_xyxy_array(bbox, shape)
 
-            if masks.shape[0]>0:
-                masks = masks.transpose([1,2,0])
-                masks = SegmentationMapsOnImage(masks,tuple(shape))
-                image, bbox, masks = self.augmentations(image=image, bounding_boxes=bbi, segmentation_maps=masks)
-                bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
-                masks = masks.get_arr().transpose([2,0,1])
-            else:
-                image, bbox = self.augmentations(image=image, bounding_boxes=bbi)
-                bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
+            image, bbox = self.augmentations(image=image, bounding_boxes=bbi)
+            bbox = bbox.to_xyxy_array()[:,[1,0,3,2]]
 
-            return image,bbox,masks
+            return image,bbox
         
         return tf.py_function(_augment, 
-                            [image,bbox,masks],
-                            (tf.uint8,tf.float32,tf.bool), name='augment')
-
-
-    @staticmethod
-    @tf.function
-    def minimize_mask(bbox, mask, mini_shape):
-        """Resize masks to a smaller version to reduce memory load.
-        Mini-masks can be resized back to image scale using expand_masks()
-
-        See inspect_data.ipynb notebook for more details.
-        """
-        def f(arg):
-            m, b = arg
-            m = tf.ensure_shape(m, [None,None])
-            m = tf.cast(m,tf.bool)
-            y1 = tf.cast(tf.round(b[0]), tf.int64)
-            x1 = tf.cast(tf.round(b[1]), tf.int64)
-            y2 = tf.cast(tf.round(b[2]), tf.int64)
-            x2 = tf.cast(tf.round(b[3]), tf.int64)
-
-            m = m[y1:y2, x1:x2]
-            if tf.size(m) == 0:
-                tf.print("mask size is zero")
-                tf.errors.INVALID_ARGUMENT
-
-            # Resize with bilinear interpolation
-            m = tf.expand_dims(m,2)
-            m = tf.cast(m, tf.uint8)
-            m = tf.image.resize(m, mini_shape, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-            m = tf.squeeze(m, -1)
-            m = tf.cast(m, tf.bool)
-            return m
-        
-        mini_mask = tf.map_fn(f, [mask,bbox],fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool))
-        return mini_mask
-
-
-    def annToRLE(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE to RLE.
-        :return: binary mask (numpy 2D array)
-        """
-        segm = ann['segmentation']
-        if isinstance(segm, list):
-            # polygon -- a single object might consist of multiple parts
-            # we merge all parts into one mask rle code
-            rles = maskUtils.frPyObjects(segm, height, width)
-            rle = maskUtils.merge(rles)
-        elif isinstance(segm['counts'], list):
-            # uncompressed RLE
-            rle = maskUtils.frPyObjects(segm, height, width)
-        else:
-            # rle
-            rle = ann['segmentation']
-        return rle
-
-
-    def annToMask(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
-        :return: binary mask (numpy 2D array)
-        """
-        rle = self.annToRLE(ann, height, width)
-        m = maskUtils.decode(rle)
-        return m
+                            [image,bbox],
+                            (tf.uint8,tf.float32), name='augment')
 
 
     @tf.function
