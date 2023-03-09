@@ -35,16 +35,13 @@ class BaseModel(KM.Model):
         self.strategy = self.config.STRATEGY
         self.eval_type = eval_type
 
+        self.anchors = self.get_anchors(config.IMAGE_SHAPE)
+
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
-
-        # parts
-        self.backbone = self.make_backbone_model()
-        self.anchors = self.get_anchors(self.config.IMAGE_SHAPE)
-
         # for evaluation
         with no_automatic_dependency_tracking_scope(self):
             self.val_results = []
@@ -54,6 +51,11 @@ class BaseModel(KM.Model):
         self.predict_model:keras.Model = self.make_predict_model()
         self.test_model:keras.Model = self.make_test_model()
         self.train_model:keras.Model = self.make_train_model()
+    
+
+    def build_parts(self, config: Config):
+        # parts
+        self.backbone = self.make_backbone_model(config)
     
 
     def compile(self, dataset:Dataset, 
@@ -102,23 +104,28 @@ class BaseModel(KM.Model):
         return
 
 
-    def make_backbone_model(self):
-        backbone:KM.Model = self.config.BACKBONE(input_tensor=KL.Input(shape=list(self.config.IMAGE_SHAPE), dtype=tf.float32),
+    def make_backbone_model(self, config: Config):
+        backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=list(config.IMAGE_SHAPE), dtype=tf.float32),
                                                  include_top=False,
                                                  weights='imagenet')
 
         output_channels = (2048,1024,512,256)
-        output_shapes = compute_backbone_shapes(self.config)[:-1][::-1]
-        output_shapes = list(zip(*zip(*output_shapes), output_channels))
+        self.backbone_output_shapes = compute_backbone_shapes(config)[:-1][::-1]
+        self.backbone_output_shapes = list(zip(*zip(*self.backbone_output_shapes), output_channels))
         idx = 0
-        outputs = []
-        for layer in backbone.layers[::-1]:
-            if tuple(layer.output_shape[1:]) == tuple(output_shapes[idx]):
-                outputs.append(layer.output)
+        output_ids = []
+        for i, layer in enumerate(backbone.layers[::-1]):
+            if tuple(layer.output_shape[1:]) == tuple(self.backbone_output_shapes[idx]):
+                output_ids.append(i)
                 idx+=1
-            if idx==len(output_shapes):
+            if idx==len(self.backbone_output_shapes):
                 break
-        outputs =outputs[:4][::-1]
+        output_ids =output_ids[:4]
+
+        backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=(None,None,3), dtype=tf.float32),
+                                                 include_top=False,
+                                                 weights='imagenet')
+        outputs = [layer.output for i, layer in enumerate(backbone.layers[::-1]) if i in output_ids][::-1]
 
         model = keras.Model(inputs=backbone.inputs, outputs=outputs)
         return model

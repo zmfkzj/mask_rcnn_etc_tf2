@@ -198,3 +198,14 @@ class MrcnnMaskLossGraph(KL.Layer):
                        lambda: tf.constant(0.0))
         loss = tf.reduce_mean(loss)
         return loss
+
+
+class MetaClassLoss(KL.Layer):
+    def call(self, attention_score, *args, **kwargs):
+        """
+        Args:
+            attentions_score (_type_): [num_classes-1, fc_layers_size]
+        """
+        prn_class_ids = tf.range(tf.shape(attention_score)[0])
+        meta_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels= prn_class_ids, logits=attention_score))
+        return meta_loss

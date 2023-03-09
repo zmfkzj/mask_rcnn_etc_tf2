@@ -46,14 +46,6 @@ class DataLoader(frcnn_data_loader.DataLoader):
         if self.mode in [Mode.TRAIN, Mode.TEST]:
             coco = self.dataset.coco
 
-        if self.mode in [Mode.PREDICT, Mode.TEST]:
-            with open(self.attentions, 'rb') as f:
-                attentions = pickle.load(f)
-
-            attentions_dataset = tf.data.Dataset\
-                .from_tensors(attentions)\
-                .repeat()
-
         if self.mode == Mode.TRAIN:
             if self.active_class_ids is None:
                 self.active_class_ids = [cat['id'] for cat in self.dataset.coco.dataset['categories']]
@@ -71,10 +63,11 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
                      num_parallel_calls=tf.data.AUTOTUNE)\
 
-            active_dataloader_class_ids = [0]+[self.dataset.get_dataloader_class_id(id) for id in self.active_class_ids]
-            num_classes = len(coco.dataset['categories'])+1
-            active_classes = [1 if dataloader_class_id in active_dataloader_class_ids else 0 for dataloader_class_id in range(num_classes)]
 
+            active_classes = [cat for cat in self.dataset.coco.cats if  cat not in self.novel_classes]
+            active_classes = [1]+[1 if cat in self.active_class_ids else 0 
+                                  for cat in active_classes]
+            
             active_classes_dataset = tf.data.Dataset\
                 .from_tensors(active_classes)\
                 .repeat()
@@ -116,9 +109,15 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
 
         elif self.mode == Mode.PREDICT:
-
             if isinstance(self.image_pathes, str):
                 self.image_pathes = [self.image_pathes]
+
+            with open(self.attentions, 'rb') as f:
+                attentions = pickle.load(f)
+
+            attentions_dataset = tf.data.Dataset\
+                .from_tensors(attentions)\
+                .repeat()
             
             pathes = []
             for p in self.image_pathes:
@@ -143,12 +142,20 @@ class DataLoader(frcnn_data_loader.DataLoader):
             self.data_loader = tf.data.Dataset\
                 .zip((self.data_loader, attentions_dataset))\
                 .map(lambda datas, attentions: [*datas, attentions],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
+                    num_parallel_calls=tf.data.AUTOTUNE)\
                 .map(lambda *datas: [datas],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
+                    num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
         
-        else:
+        else: # Test
+            if self.attentions is not None:
+                with open(self.attentions, 'rb') as f:
+                    attentions = pickle.load(f)
+
+                attentions_dataset = tf.data.Dataset\
+                    .from_tensors(attentions)\
+                    .repeat()
+
             pathes = tf.data.Dataset\
                 .from_tensor_slices([img['path'] for img in coco.dataset['images']])
             img_ids = tf.data.Dataset\
@@ -161,21 +168,31 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
                 .batch(self.batch_size)\
             
-            self.data_loader = tf.data.Dataset\
-                .zip((self.data_loader, attentions_dataset))\
-                .map(lambda datas, attentions: [*datas, attentions],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .map(lambda *datas: [datas],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .repeat()\
-                .prefetch(tf.data.AUTOTUNE)
+            if self.attentions is not None:
+                self.data_loader = tf.data.Dataset\
+                    .zip((self.data_loader, attentions_dataset))\
+                    .map(lambda datas, attentions: [*datas, attentions],
+                        num_parallel_calls=tf.data.AUTOTUNE)\
+                    .map(lambda *datas: [datas],
+                        num_parallel_calls=tf.data.AUTOTUNE)\
+                    .repeat()\
+                    .prefetch(tf.data.AUTOTUNE)
+            else:
+                self.data_loader = self.data_loader\
+                    .map(lambda *datas: [datas],
+                        num_parallel_calls=tf.data.AUTOTUNE)\
+                    .repeat()\
+                    .prefetch(tf.data.AUTOTUNE)
+            
+        with self.config.STRATEGY.scope():
+            self.data_loader = self.config.STRATEGY.experimental_distribute_dataset(self.data_loader)
 
 
     @tf.function
     def preprocessing_prn(self, ann_id):
         image_id = tf.py_function(lambda id: self.dataset.coco.loadAnns(int(id))[0]['image_id'], (ann_id,),tf.int32)
         path = tf.py_function(lambda id: self.dataset.coco.loadImgs(int(id))[0]['path'], (image_id,),tf.string)
-        bbox = tf.py_function(lambda id: self.dataset.coco.loadAnns(int(id))[0]['bbox'], (ann_id,),(tf.float32,tf.float32,tf.float32,tf.float32))
+        bbox = tf.py_function(lambda id: tf.constant(self.dataset.coco.loadAnns(int(id))[0]['bbox']), (ann_id,),tf.float32)
         x1 = bbox[0]
         y1 = bbox[1]
         w = bbox[2]

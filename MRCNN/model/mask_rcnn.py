@@ -28,11 +28,15 @@ class MaskRcnn(FasterRcnn):
         model_dir: Directory to save training logs and trained weights
         """
         super(BaseModel, self).__init__(name='mask_rcnn')
+        self.build_parts(config)
+        super(FasterRcnn, self).__init__(config,EvalType.SEGM)
+    
 
+    def build_parts(self, config: Config):
+        super().build_parts(config)
         #additional parts
         self.ROIAlign_mask = tfm.vision.layers.MultilevelROIAligner(config.MASK_POOL_SIZE, name="roi_align_mask")
         self.fpn_mask = FPN_mask(config.NUM_CLASSES)
-        super().__init__(config,EvalType.SEGM)
 
     
     def predict_step(self, data):
@@ -80,6 +84,11 @@ class MaskRcnn(FasterRcnn):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
+        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-1][:2]+(256,))
+        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-2][:2]+(256,))
+        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3][:2]+(256,))
+        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-4][:2]+(256,))
+
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
 
@@ -155,6 +164,11 @@ class MaskRcnn(FasterRcnn):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
+        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-1][:2]+(256,))
+        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-2][:2]+(256,))
+        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3][:2]+(256,))
+        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-4][:2]+(256,))
+
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
 

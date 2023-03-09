@@ -7,7 +7,7 @@ from MRCNN.config import Config
 from MRCNN.enums import EvalType
 from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
-from MRCNN.model.base_model import BaseModel, Model
+from MRCNN.model.base_model import BaseModel
 
 from ..layer import DetectionLayer, FrcnnTarget, ProposalLayer
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
@@ -21,19 +21,21 @@ class FasterRcnn(BaseModel):
     """
     def __init__(self, config:Config):
         """
-        mode: Either "training" or "inference"
         config: A Sub-class of the Config class
-        model_dir: Directory to save training logs and trained weights
         """
         super(BaseModel, self).__init__(name='faster_rcnn')
+        self.build_parts(config)
+        super().__init__(config, EvalType.BBOX)
 
+    
+    def build_parts(self, config: Config):
+        super().build_parts(config)
         #additional parts
         self.neck = Neck(config)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
         self.fpn_classifier = FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
-        super().__init__(config, EvalType.BBOX)
 
     
     def predict_step(self, data):
@@ -80,6 +82,11 @@ class FasterRcnn(BaseModel):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
+        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-1][:2]+(256,))
+        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-2][:2]+(256,))
+        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3][:2]+(256,))
+        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-4][:2]+(256,))
+
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
 
@@ -143,6 +150,11 @@ class FasterRcnn(BaseModel):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
+        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-1][:2]+(256,))
+        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-2][:2]+(256,))
+        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3][:2]+(256,))
+        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-4][:2]+(256,))
+
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
 

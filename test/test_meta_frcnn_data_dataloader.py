@@ -40,10 +40,10 @@ class TestDataLoader(unittest.TestCase):
 
     def test_make_Dataloader_rcnn_test(self):
         config = Config()
-        dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
-                          '/home/tmdocker/host/dataset/5_coco_merge/images')
+        dataset = Dataset(self.val_json_path, 
+                          self.val_image_path)
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, active_class_ids, Mode.TEST, 2, dataset=dataset)
+        loader = DataLoader(config, Mode.TEST, 2, active_class_ids=active_class_ids ,dataset=dataset, novel_classes=(1,2,3))
         loader = iter(loader)
         print(next(loader))
         print(next(loader))
