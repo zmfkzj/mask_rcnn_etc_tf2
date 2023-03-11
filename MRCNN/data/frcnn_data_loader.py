@@ -20,8 +20,6 @@ from MRCNN.utils import (compute_backbone_shapes,
 class DataLoader:
     config:Config
     mode:Mode
-    batch_size:int
-    active_class_ids:Optional[list[int]] = None
     dataset:Optional[Dataset] = None
     image_pathes:Optional[Union[str,list[str]]] = None
     augmentations:Optional[Sequential] = None
@@ -35,12 +33,18 @@ class DataLoader:
                             self.config.BACKBONE_STRIDES,
                             self.config.RPN_ANCHOR_STRIDE)
         
+
+        
         if self.mode in [Mode.TRAIN, Mode.TEST]:
             coco = self.dataset.coco
 
         if self.mode == Mode.TRAIN:
-            if self.active_class_ids is None:
-                self.active_class_ids = [cat['id'] for cat in self.dataset.coco.dataset['categories']]
+            self.batch_size = self.config.TRAIN_BATCH_SIZE
+
+            if self.config.ACTIVE_CLASS_IDS is None:
+                self.active_class_ids = [cat for cat in self.dataset.coco.cats if  cat not in self.config.NOVEL_CLASSES]
+            else:
+                self.active_class_ids = self.config.ACTIVE_CLASS_IDS
 
             path = tf.data.Dataset\
                 .from_tensor_slices([img['path'] for img in coco.dataset['images']])
@@ -74,6 +78,8 @@ class DataLoader:
                 .prefetch(tf.data.AUTOTUNE)
 
         elif self.mode == Mode.PREDICT:
+            self.batch_size = self.config.TEST_BATCH_SIZE
+
             if isinstance(self.image_pathes, str):
                 self.image_pathes = [self.image_pathes]
             
@@ -100,6 +106,8 @@ class DataLoader:
                 .prefetch(tf.data.AUTOTUNE)
         
         else:
+            self.batch_size = self.config.TEST_BATCH_SIZE
+
             pathes = tf.data.Dataset\
                 .from_tensor_slices([img['path'] for img in coco.dataset['images']])
             img_ids = tf.data.Dataset\

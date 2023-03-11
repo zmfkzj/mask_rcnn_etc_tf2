@@ -32,7 +32,7 @@ class RpnClassLossGraph(KL.Layer):
         rpn_class_logits: [batch, anchors, 2]. RPN classifier logits for BG/FG.
         """
         # Squeeze last dim to simplify
-        rpn_match = tf.squeeze(rpn_match, -1)
+        # rpn_match = tf.squeeze(rpn_match, -1)
         # Get anchor classes. Convert the -1/+1 match to 0/1 values.
         anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int64)
         # Positive and Negative anchors contribute to the loss,
@@ -68,7 +68,7 @@ class RpnBboxLossGraph(KL.Layer):
         """
         # Positive anchors contribute to the loss, but negative and
         # neutral anchors (match value of 0 or -1) don't.
-        rpn_match = tf.squeeze(rpn_match, -1)
+        # rpn_match = tf.squeeze(rpn_match, -1)
         indices = tf.where(tf.equal(rpn_match, 1))
 
         # Pick bbox deltas that contribute to the loss
@@ -204,7 +204,7 @@ class MetaClassLoss(KL.Layer):
     def call(self, attention_score, *args, **kwargs):
         """
         Args:
-            attentions_score (_type_): [num_classes-1, fc_layers_size]
+            attentions_score (_type_): [num_classes, num_classes]
         """
         prn_class_ids = tf.range(tf.shape(attention_score)[0])
         meta_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels= prn_class_ids, logits=attention_score))

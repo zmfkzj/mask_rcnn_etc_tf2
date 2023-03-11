@@ -5,6 +5,7 @@ class Mode(Enum):
     PREDICT = 'predict'
     TEST = 'test'
     TRAIN = 'train'
+    PRN = 'prn'
 
 
 class TrainLayers(Enum):

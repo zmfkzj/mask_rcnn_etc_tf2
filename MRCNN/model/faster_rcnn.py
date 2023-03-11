@@ -19,18 +19,11 @@ class FasterRcnn(BaseModel):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config):
+    def __init__(self, config:Config, eval_type=EvalType.BBOX):
         """
         config: A Sub-class of the Config class
         """
-        super(BaseModel, self).__init__(name='faster_rcnn')
-        self.build_parts(config)
-        super().__init__(config, EvalType.BBOX)
-
-    
-    def build_parts(self, config: Config):
-        super().build_parts(config)
-        #additional parts
+        super().__init__(config, eval_type)
         self.neck = Neck(config)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 

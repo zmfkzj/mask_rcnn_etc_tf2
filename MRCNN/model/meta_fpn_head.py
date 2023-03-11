@@ -16,7 +16,7 @@ class FPN_classifier(KM.Model):
         self.timedist_bn_2 = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_class_bn2')
 
         # Classifier head
-        self.class_logits = KL.TimeDistributed(KL.Dense(1), name='mrcnn_class_logits')
+        self.class_logits = KL.Conv2D(1,(1,1), name='mrcnn_class_logits')
         self.probs = KL.TimeDistributed(KL.Activation("softmax"), name="mrcnn_class")
 
         # BBox head

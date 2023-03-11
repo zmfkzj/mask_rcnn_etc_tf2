@@ -67,10 +67,7 @@ class TestModel(unittest.TestCase):
     
     def test_train(self):
         novel_classes=(1,2,3)
-        config = Config()
-        config.GPUS = 0
-        config.GPU_COUNT = 1
-        config.NUM_CLASSES = config.NUM_CLASSES - len(novel_classes)
+        config = Config(GPUS=0, NUM_CLASSES=81 - len(novel_classes))
         train_dataset = Dataset(self.train_json_path, self.train_image_path)
         val_dataset = Dataset(self.val_json_path, self.val_image_path)
 
@@ -83,8 +80,7 @@ class TestModel(unittest.TestCase):
             model = MetaFasterRcnn(config)
             model.compile(val_dataset, active_class_ids,optimizer='adam')
 
-        hist = model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
-        print(hist.history)
+        model.fit(iter(train_loader), epochs=2,validation_data=iter(val_loader), steps_per_epoch=2,validation_steps=2)
 
 
     def test_evaluate(self):

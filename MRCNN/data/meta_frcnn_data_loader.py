@@ -1,6 +1,5 @@
 import os
 from pydantic.dataclasses import dataclass
-from pydantic import Field
 from pathlib import Path
 from typing import Optional, Union
 from official.vision.ops.iou_similarity import iou
@@ -19,15 +18,47 @@ from MRCNN.utils import (compute_backbone_shapes,
                          generate_pyramid_anchors)
 from pycocotools import mask as maskUtils
 
+class InputDatas(tf.experimental.ExtensionType):
+    input_gt_boxes: tf.Tensor
+    dataloader_class_ids: tf.Tensor
+    rpn_match: tf.Tensor
+    rpn_bbox: tf.Tensor
+    active_class_ids: tf.Tensor
+    prn_images: tf.Tensor
+    pathes: tf.Tensor
+    input_images: tf.Tensor
+    input_window: tf.Tensor
+    origin_image_shapes: tf.Tensor
+    image_ids: tf.Tensor
+    attentions: tf.Tensor
+
+    def replace_data(self, new_dict):
+        args = {
+            'input_gt_boxes': self.input_gt_boxes,
+            'dataloader_class_ids': self.dataloader_class_ids,
+            'rpn_match': self.rpn_match,
+            'rpn_bbox': self.rpn_bbox,
+            'active_class_ids': self.active_class_ids,
+            'prn_images': self.prn_images,
+            'pathes': self.pathes,
+            'input_images': self.input_images,
+            'input_window': self.input_window,
+            'origin_image_shapes': self.origin_image_shapes,
+            'image_ids': self.image_ids,
+            'attentions': self.attentions
+            }
+        args.update(new_dict)
+        return InputDatas(**args)
+
 
 @dataclass
 class DataLoader(frcnn_data_loader.DataLoader):
-    novel_classes:list[int] = ...
+
     phase:int=1
     attentions:Optional[str] = None
 
     def __hash__(self) -> int:
-        return hash((tuple(self.active_class_ids) if self.active_class_ids is not None else None, 
+        return hash((tuple(self.config.ACTIVE_CLASS_IDS) if self.config.ACTIVE_CLASS_IDS is not None else None, 
                      self.mode, 
                      tuple(self.image_pathes) if self.image_pathes is not None else None, 
                      self.dataset,
@@ -42,13 +73,45 @@ class DataLoader(frcnn_data_loader.DataLoader):
                             backbone_shapes,
                             self.config.BACKBONE_STRIDES,
                             self.config.RPN_ANCHOR_STRIDE)
+
+        default_datas = InputDatas(
+            input_gt_boxes = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES,4],dtype=tf.float32),
+            dataloader_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES],dtype=tf.int64),
+            rpn_match = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.anchors.shape[0],1], dtype=tf.int64),
+            rpn_bbox = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32),
+            active_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.NUM_CLASSES], dtype=tf.int32),
+            prn_images = tf.zeros([self.config.PRN_BATCH_SIZE,self.config.NUM_CLASSES-1,*self.config.PRN_IMAGE_SIZE, 4], dtype=tf.float32),
+            pathes = tf.zeros([self.config.TRAIN_BATCH_SIZE],dtype=tf.string),
+            input_images = tf.zeros([self.config.TRAIN_BATCH_SIZE, *self.config.IMAGE_SHAPE], dtype=tf.float32),
+            input_window = tf.zeros([self.config.TRAIN_BATCH_SIZE,4], dtype=tf.float32),
+            origin_image_shapes = tf.zeros([self.config.TRAIN_BATCH_SIZE,2], dtype=tf.int32),
+            image_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE], dtype=tf.int32),
+            attentions = tf.zeros([self.config.NUM_CLASSES,self.config.FPN_CLASSIF_FC_LAYERS_SIZE], dtype=tf.float32)
+        )
+
+        if self.phase==1:
+            self.dataset.set_dataloader_class_list(self.config.NOVEL_CLASSES)
+        
+        self.novel_classes = tuple(self.config.NOVEL_CLASSES)
+        if self.config.SHOTS > self.dataset.min_class_count:
+            ValueError('SHOTS must be less than min_class_count')
         
         if self.mode in [Mode.TRAIN, Mode.TEST]:
             coco = self.dataset.coco
 
         if self.mode == Mode.TRAIN:
-            if self.active_class_ids is None:
-                self.active_class_ids = [cat['id'] for cat in self.dataset.coco.dataset['categories']]
+            self.batch_size = self.config.TRAIN_BATCH_SIZE
+
+            if self.config.ACTIVE_CLASS_IDS is None:
+                if self.phase == 1:
+                    self.active_class_ids = tuple([cat for cat in self.dataset.coco.cats if  cat not in self.config.NOVEL_CLASSES])
+                else:
+                    self.active_class_ids = tuple([cat for cat in self.dataset.coco.cats])
+            else:
+                if self.phase == 1:
+                    self.active_class_ids = tuple([id for id in self.config.ACTIVE_CLASS_IDS if id not in self.config.NOVEL_CLASSES])
+                else:
+                    self.active_class_ids = tuple(self.config.ACTIVE_CLASS_IDS)
 
             path = tf.data.Dataset\
                 .from_tensor_slices([img['path'] for img in coco.dataset['images']])
@@ -64,9 +127,8 @@ class DataLoader(frcnn_data_loader.DataLoader):
                      num_parallel_calls=tf.data.AUTOTUNE)\
 
 
-            active_classes = [cat for cat in self.dataset.coco.cats if  cat not in self.novel_classes]
             active_classes = [1]+[1 if cat in self.active_class_ids else 0 
-                                  for cat in active_classes]
+                                  for cat in self.active_class_ids]
             
             active_classes_dataset = tf.data.Dataset\
                 .from_tensors(active_classes)\
@@ -82,14 +144,19 @@ class DataLoader(frcnn_data_loader.DataLoader):
                         .from_tensor_slices(ann_ids)\
                         .shuffle(len(ann_ids))\
                         .map(self.preprocessing_prn,num_parallel_calls=tf.data.AUTOTUNE)\
-                        .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))\
-                        .repeat()
+                        .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))
+
+                    if self.config.SHOTS==0:
+                        dataset = dataset.repeat()
+                    else:
+                        dataset = dataset.take(self.config.SHOTS).repeat()
+
                     prn_datasets.append(dataset)
             
             prn_dataset = tf.data.Dataset\
                 .zip(tuple(prn_datasets))\
                 .map(lambda *prn_images: tf.stack(prn_images, 0), num_parallel_calls=tf.data.AUTOTUNE)\
-                .batch(self.config.PRN_BATCH_PER_GPU*self.config.GPU_COUNT)
+                .batch(self.config.PRN_IMAGES_PER_GPU*self.config.GPU_COUNT)
             
 
             self.data_loader = tf.data.Dataset\
@@ -103,12 +170,23 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 .zip((self.data_loader, prn_dataset))\
                 .map(lambda datas, prn_images: [*datas, prn_images],
                      num_parallel_calls=tf.data.AUTOTUNE)\
-                .map(lambda *datas: [datas],
+                .map(lambda resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids, prn_images: 
+                     [default_datas.replace_data({
+                        'input_gt_boxes' : resized_boxes,
+                        'dataloader_class_ids' : dataloader_class_ids,
+                        'rpn_match':rpn_match,
+                        'rpn_bbox':rpn_bbox,
+                        'active_class_ids':active_class_ids,
+                        'prn_images':prn_images,
+                        'input_images':resized_image,
+                        })],
                      num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
 
 
         elif self.mode == Mode.PREDICT:
+            self.batch_size = self.config.TEST_BATCH_SIZE
+
             if isinstance(self.image_pathes, str):
                 self.image_pathes = [self.image_pathes]
 
@@ -143,11 +221,20 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 .zip((self.data_loader, attentions_dataset))\
                 .map(lambda datas, attentions: [*datas, attentions],
                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .map(lambda *datas: [datas],
+                .map(lambda input_images, input_window, origin_image_shapes, pathes, attentions: 
+                     [default_datas.replace_data({
+                        'input_images':input_images,
+                        'input_window':input_window,
+                        'origin_image_shapes' : origin_image_shapes,
+                        'pathes' : pathes,
+                        'attentions' : attentions
+                     })],
                     num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
         
         else: # Test
+            self.batch_size = self.config.TEST_BATCH_SIZE
+
             if self.attentions is not None:
                 with open(self.attentions, 'rb') as f:
                     attentions = pickle.load(f)
@@ -173,13 +260,26 @@ class DataLoader(frcnn_data_loader.DataLoader):
                     .zip((self.data_loader, attentions_dataset))\
                     .map(lambda datas, attentions: [*datas, attentions],
                         num_parallel_calls=tf.data.AUTOTUNE)\
-                    .map(lambda *datas: [datas],
+                    .map(lambda input_images, input_window, origin_image_shapes, image_ids, attentions : 
+                         [default_datas.replace_data({
+                            'input_images' : input_images,
+                            'input_window':input_window,
+                            'origin_image_shapes' : origin_image_shapes,
+                            'image_ids' : image_ids,
+                            'attentions' : attentions
+                         })],
                         num_parallel_calls=tf.data.AUTOTUNE)\
                     .repeat()\
                     .prefetch(tf.data.AUTOTUNE)
             else:
                 self.data_loader = self.data_loader\
-                    .map(lambda *datas: [datas],
+                    .map(lambda input_images, input_window, origin_image_shapes, image_ids: 
+                         [default_datas.replace_data({
+                            'input_images' : input_images,
+                            'input_window':input_window,
+                            'origin_image_shapes' : origin_image_shapes,
+                            'image_ids' : image_ids
+                         })],
                         num_parallel_calls=tf.data.AUTOTUNE)\
                     .repeat()\
                     .prefetch(tf.data.AUTOTUNE)

@@ -14,7 +14,8 @@ from tensorflow.python.keras.saving.saved_model.utils import \
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.enums import EvalType, Model, TrainLayers
+from MRCNN.data.meta_frcnn_data_loader import InputDatas
+from MRCNN.enums import EvalType, Mode, Model, TrainLayers
 from MRCNN.metric import F1Score
 
 from ..utils import LossWeight, compute_backbone_shapes, unmold_detections
@@ -31,6 +32,7 @@ class BaseModel(KM.Model):
         config: A Sub-class of the Config class
         model_dir: Directory to save training logs and trained weights
         """
+        super().__init__()
         self.config = config
         self.strategy = self.config.STRATEGY
         self.eval_type = eval_type
@@ -47,14 +49,6 @@ class BaseModel(KM.Model):
             self.val_results = []
         self.param_image_ids = set()
     
-        # excuting models
-        self.predict_model:keras.Model = self.make_predict_model()
-        self.test_model:keras.Model = self.make_test_model()
-        self.train_model:keras.Model = self.make_train_model()
-    
-
-    def build_parts(self, config: Config):
-        # parts
         self.backbone = self.make_backbone_model(config)
     
 
@@ -71,12 +65,27 @@ class BaseModel(KM.Model):
                 steps_per_execution=None, 
                 jit_compile=None, 
                 **kwargs):
-        self.set_trainable(train_layers)
         self.dataset = dataset
         self.active_class_ids = active_class_ids
         self.iou_thresh = iou_thresh
         self.loss_weights = loss_weights
-        return super().compile(optimizer, loss, metrics, None, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
+        self.optimizer:keras.optimizers.Optimizer = optimizer
+        dummy_data = InputDatas(
+            input_gt_boxes = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES,4]),
+            dataloader_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES],dtype=tf.int64),
+            rpn_match = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.anchors.shape[0]], dtype=tf.int64),
+            rpn_bbox = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32),
+            active_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.NUM_CLASSES], dtype=tf.int32),
+            prn_images = tf.zeros([self.config.PRN_BATCH_SIZE,self.config.NUM_CLASSES-1,*self.config.PRN_IMAGE_SIZE, 4], dtype=tf.float32),
+            pathes = tf.zeros([self.config.TRAIN_BATCH_SIZE],dtype=tf.string),
+            input_images = tf.zeros([self.config.TRAIN_BATCH_SIZE, *self.config.IMAGE_SHAPE], dtype=tf.float32),
+            input_window = tf.zeros([self.config.TRAIN_BATCH_SIZE,4], dtype=tf.float32),
+            origin_image_shapes = tf.zeros([self.config.TRAIN_BATCH_SIZE,2], dtype=tf.int32),
+            image_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE], dtype=tf.int32),
+            attentions = tf.zeros([self.config.NUM_CLASSES,self.config.FPN_CLASSIF_FC_LAYERS_SIZE], dtype=tf.float32)
+        )
+        self(dummy_data,Mode.TRAIN.value)
+        self.set_trainable(train_layers)
 
     
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):

@@ -7,16 +7,39 @@ import numpy as np
 from keras.utils import tf_utils
 
 from MRCNN.config import Config
-from MRCNN.enums import EvalType
+from MRCNN.data.meta_frcnn_data_loader import InputDatas
+from MRCNN.enums import EvalType, Mode
 from MRCNN.layer.prn_background import PrnBackground
 from MRCNN.loss import (MetaClassLoss, MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
 from MRCNN.model.base_model import BaseModel
 from MRCNN.model.faster_rcnn import FasterRcnn
+from MRCNN.model.meta_fpn_head import FPN_classifier
 
 from ..layer import DetectionLayer, FrcnnTarget, ProposalLayer
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
 from . import RPN, meta_FPN_classifier, Neck
+
+
+class Outputs(tf.experimental.ExtensionType):
+    detections: tf.Tensor
+    attentions: tf.Tensor
+    rpn_class_loss: tf.Tensor
+    rpn_bbox_loss: tf.Tensor
+    class_loss: tf.Tensor
+    bbox_loss: tf.Tensor
+    meta_loss: tf.Tensor
+
+    def replace_data(self, new_dict):
+        args = {'detections':self.detections,
+                'attentions':self.attentions, 
+                'rpn_class_loss':self.rpn_class_loss, 
+                'rpn_bbox_loss':self.rpn_bbox_loss, 
+                'class_loss':self.class_loss, 
+                'bbox_loss':self.bbox_loss, 
+                'meta_loss':self.meta_loss}
+        args.update(new_dict)
+        return Outputs(**args)
 
 
 class MetaFasterRcnn(FasterRcnn):
@@ -24,53 +47,62 @@ class MetaFasterRcnn(FasterRcnn):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config):
+
+    def __init__(self, config:Config, eval_type=EvalType.BBOX):
         """
         config: A Sub-class of the Config class
         """
-        super(BaseModel, self).__init__(name='faster_rcnn') # keras.Model.__init__
-        self.build_parts(config)
-        super(FasterRcnn, self).__init__(config, EvalType.BBOX) # BaseModel.__init__
-
-    
-    def build_parts(self, config: Config):
-        super().build_parts(config)
-        #additional parts
-        self.neck = Neck(config)
-        self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
-
-        self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
-        self.fpn_classifier = meta_FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
-
-        #meta parts
+        # super(BaseModel, self).__init__(name='faster_rcnn') # keras.Model.__init__
+        # self.build_parts(config)
+        # super(FasterRcnn, self).__init__(config, EvalType.BBOX) # BaseModel.__init__
+        super().__init__(config, eval_type)
         self.meta_input_conv1 = KL.Conv2D(3,(1,1), name='meta_input_conv1')
         self.attention_fc = KL.Dense(config.FPN_CLASSIF_FC_LAYERS_SIZE, name="meta_attention")
         self.attention_batchnorm = KL.BatchNormalization(name='meta_bachnorm_1')
         self.meta_cls_score = KL.Dense(config.NUM_CLASSES, name='meta_score')
-        self.prn_model:keras.Model = KL.TimeDistributed(self.make_prn_model(config))
+        self.fpn_classifier = meta_FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
+
+        self.default_outputs = Outputs(
+            detections = tf.zeros([self.config.MAX_GT_INSTANCES,6], dtype=tf.float32),
+            attentions = tf.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE], tf.float32),
+            rpn_class_loss = tf.constant(0., tf.float32),
+            rpn_bbox_loss = tf.constant(0., tf.float32),
+            class_loss = tf.constant(0., tf.float32),
+            bbox_loss = tf.constant(0., tf.float32),
+            meta_loss = tf.constant(0., tf.float32)
+            )
 
 
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, pathes, attentions = data[0]
-        detections = self.predict_model([input_images, input_window, attentions])
-        return detections,origin_image_shapes, input_window, pathes
+        input_data:InputDatas = data[0]
+        outputs:Outputs = self(input_data, Mode.PREDICT.value)
+
+        return outputs.detections,input_data.origin_image_shapes, input_data.input_window, input_data.pathes
 
 
     def test_step(self, data):
-        input_images, input_window, origin_image_shapes, image_ids, attentions = data[0]
-        detections = self.test_model([input_images, input_window, attentions])
-        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window), ())
+        input_data:InputDatas = data[0]
+        outputs:Outputs = self(input_data, Mode.TEST.value)
+        tf.py_function(self.build_coco_results, (input_data.image_ids, outputs.detections, input_data.origin_image_shapes, input_data.input_window), ())
         return {}
 
 
     def train_step(self, data):
-        resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids, prn_images = data[0]
+        input_data:InputDatas = data[0]
         with tf.GradientTape() as tape:
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, meta_loss = \
-                self.train_model([resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids, prn_images], training=True)
+            outputs:Outputs = self(input_data, Mode.TRAIN.value)
+
+            rpn_class_loss = outputs.rpn_class_loss
+            rpn_bbox_loss = outputs.rpn_bbox_loss
+            class_loss = outputs.class_loss
+            bbox_loss = outputs.bbox_loss
+            meta_loss = outputs.meta_loss
+
+            # rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, meta_loss = self.losses
+
 
             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                            for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
+                            for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
             losses = [reg_losses, 
                     rpn_class_loss    * self.loss_weights.rpn_class_loss, 
@@ -79,26 +111,43 @@ class MetaFasterRcnn(FasterRcnn):
                     bbox_loss         * self.loss_weights.mrcnn_bbox_loss,
                     meta_loss         * self.loss_weights.meta_loss]
 
-        gradients = tape.gradient(losses, self.train_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+        gradients = tape.gradient(losses, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # losses = [loss/self.config.GPU_COUNT for loss in losses]
         mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, meta_loss = losses
         return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'meta_loss':meta_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
 
+
+    def prn_step(self, data):
+        input_data:InputDatas = data[0]
+        outputs:Outputs = self(input_data, Mode.PRN.value)
+        return outputs.attentions
+
+
+    @tf.function
+    def custom_train_function(self, dist_inputs):
+        losses = self.distribute_strategy.run(self.train_step, args=(dist_inputs,))
+        mean_losses = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
+        return mean_losses
+
+
+    @tf.function
+    def custom_test_function(self, dist_inputs):
+        output = self.distribute_strategy.run(self.test_step, args=(dist_inputs,))
+        mean_output = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, output,axis=None)
+        return mean_output
     
+
+    @tf.function
+    def infer_attentions_function(self, dist_inputs):
+        batch_attentions = self.distribute_strategy.run(self.prn_step, args=(dist_inputs,))
+        attentions = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, batch_attentions,axis=None)
+        return attentions
+    
+
     def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose="auto", callbacks=None, validation_split=0, validation_data=None, shuffle=True, class_weight=None, sample_weight=None, initial_epoch=0, steps_per_epoch=None, validation_steps=None, validation_batch_size=None, validation_freq=1, max_queue_size=10, workers=1, use_multiprocessing=False):
-        def train_function(dist_inputs):
-            losses = self.distribute_strategy.run(self.train_step, args=(dist_inputs,))
-            mean_losses = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
-            return mean_losses
-
-        def test_function(dist_inputs):
-            output = self.distribute_strategy.run(self.test_step, args=(dist_inputs,))
-            mean_output = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, output,axis=None)
-            return mean_output
-
 
         with self.distribute_strategy.scope():
             if not isinstance(callbacks, keras.callbacks.CallbackList):
@@ -115,15 +164,17 @@ class MetaFasterRcnn(FasterRcnn):
             for epoch in range(epochs):
                 self.reset_metrics()
                 callbacks.on_epoch_begin(epoch)
+                pbar = keras.utils.Progbar(target=self.config.STEPS_PER_EPOCH)
                 for step,data in enumerate(x):
                     callbacks.on_train_batch_begin(step)
-                    train_logs = train_function(data)
+                    train_logs = self.custom_train_function(data)
+                    pbar.update(step,train_logs.items(), finalize=False)
                     callbacks.on_train_batch_end(step+1, train_logs)
                     if step==steps_per_epoch:
                         break
                 
-                logs = tf_utils.sync_to_numpy_or_python_type(logs)
-                if logs is None:
+                train_logs = tf_utils.sync_to_numpy_or_python_type(train_logs)
+                if train_logs is None:
                     raise ValueError(
                         "Unexpected result of `train_function` "
                         "(Empty logs). Please use "
@@ -133,30 +184,37 @@ class MetaFasterRcnn(FasterRcnn):
                         "issue/bug to `tf.keras`."
                     )
                 # Override with model metrics instead of last step logs
-                logs = self._validate_and_get_metrics_result(logs)
-                epoch_logs = copy.copy(logs)
+                train_logs = self._validate_and_get_metrics_result(train_logs)
+                epoch_logs = copy.copy(train_logs)
                 
 
                 cls_attentions_sum = np.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE])
                 cls_attentions_cnt = 0
                 for step,data in enumerate(x):
-                    resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids, prn_images = data[0]
-                    batch_attentions = self.prn_model.predict(prn_images)
-                    cls_attentions_sum += tf.reduce_mean(batch_attentions,0).numpy()
+                    attentions = self.infer_attentions_function(data)
+                    cls_attentions_sum += attentions.numpy()
                     cls_attentions_cnt += 1
-                    batch_size = resized_image.shape[0]
-                    if step == (self.dataset.min_class_count//batch_size + 1):
+                    if step == (self.dataset.min_class_count//self.config.PRN_BATCH_SIZE + 1):
                         break
                 attentions = cls_attentions_sum/cls_attentions_cnt
-                attentions = tf.broadcast_to(tf.expand_dims(attentions,0), [batch_size, *attentions.shape])
 
 
                 if validation_data is not None:
                     callbacks.on_test_begin()
                     for step,data in enumerate(validation_data):
                         callbacks.on_test_batch_begin(step)
-                        input_images, input_window, origin_image_shapes, image_ids = data[0]
-                        test_logs = test_function([[input_images, input_window, origin_image_shapes, image_ids, attentions]])
+                        input_datas:InputDatas = data[0]
+                        input_datas = input_datas.replace_data({'attentions':tf.cast(attentions, tf.float32)})
+
+                        self.custom_test_function([input_datas])
+                        self.param_image_ids.clear()
+                        self.val_results.clear()
+
+                        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = self.get_coco_metrics()
+                            # tf.py_function(self.get_coco_metrics, (), 
+                            #             (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
+        
+                        test_logs = {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
                         callbacks.on_test_batch_end(step+1, test_logs)
 
                         if step==validation_steps:
@@ -168,15 +226,39 @@ class MetaFasterRcnn(FasterRcnn):
 
                     callbacks.on_test_end(logs=test_logs)
                     epoch_logs.update(test_logs)
+                pbar.update(step,epoch_logs.items(), finalize=True)
                 callbacks.on_epoch_end(epoch, epoch_logs)
             callbacks.on_train_end(logs=epoch_logs)
 
 
-    def make_predict_model(self):
-        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='predict_input_image')
-        input_window = KL.Input(shape=(4,), name="predict_input_window")
-        input_attentions = KL.Input( shape=[None, self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE], name="input_attentions", dtype=tf.float32)
+    def call(self, input_datas:InputDatas, mode:str) -> Outputs:
+        if mode in [Mode.PREDICT.value, Mode.TEST.value]:
+            outputs = self.forward_predict_test(input_datas.input_images,
+                                                input_datas.input_window,
+                                                input_datas.attentions)
+        elif mode==Mode.TRAIN.value:
+            outputs = self.forward_timedist_prn(input_datas.input_images, 
+                                               input_datas.input_gt_boxes,
+                                               input_datas.prn_images)
+            outputs = self.forward_train(input_datas.input_images,
+                                         input_datas.active_class_ids,
+                                         input_datas.rpn_match,
+                                         input_datas.rpn_bbox,
+                                         input_datas.dataloader_class_ids,
+                                         input_datas.input_gt_boxes,
+                                         outputs.attentions)
+        elif mode == Mode.PRN.value:
+            outputs = self.forward_timedist_prn(input_datas.input_images, 
+                                               input_datas.input_gt_boxes,
+                                               input_datas.prn_images)
+        else:
+            outputs = Outputs()
+            ValueError('argument mode must be one of predict, test, train, or prn.')
+        return outputs
 
+
+    @tf.function
+    def forward_predict_test(self, input_image, input_window, input_attentions):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
@@ -196,10 +278,10 @@ class MetaFasterRcnn(FasterRcnn):
         # Convert from list of lists of level outputs to list of lists
         # of outputs across levels.
         # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
-        outputs = list(zip(*layer_outputs))
-        outputs = [c(list(o)) for o, c in zip(outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
+        rpn_outputs = list(zip(*layer_outputs))
+        rpn_outputs = [c(list(o)) for o, c in zip(rpn_outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
 
-        rpn_class_logits, rpn_class, rpn_bbox = outputs
+        rpn_class_logits, rpn_class, rpn_bbox = rpn_outputs
 
         # Generate proposals
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
@@ -217,39 +299,17 @@ class MetaFasterRcnn(FasterRcnn):
         # Network Heads
         # Proposal classifier and BBox regressor heads
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, input_attentions, training=False)
-        detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
+        detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, tf.cast(input_window, tf.float32))
 
-        model = keras.Model([input_image, input_window, input_attentions],
-                            detections,
-                            name='predict_model')
-        return model
+        outputs = self.default_outputs.replace_data({'detections':detections})
+        return outputs
 
     
-    def make_test_model(self):
-        return self.make_predict_model()
-    
-
-    def make_train_model(self):
-        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="train_input_image")
-        active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="train_input_class_ids")
-        # RPN GT
-        input_rpn_match = KL.Input( shape=[None, 1], name="train_input_rpn_match", dtype=tf.int64)
-        input_rpn_bbox = KL.Input( shape=[None, 4], name="train_input_rpn_bbox", dtype=tf.float32)
-
-        # Detection GT (class IDs, bounding boxes, and masks)
-        # 1. GT Class IDs (zero padded)
-        input_gt_class_ids = KL.Input( shape=[None], name="train_input_gt_class_ids", dtype=tf.int64)
-        # 2. GT Boxes in pixels (zero padded)
-        # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
-        input_gt_boxes = KL.Input( shape=[None, 4], name="train_input_gt_boxes", dtype=tf.float32)
+    @tf.function
+    def forward_train(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, attentions):
         # Normalize coordinates
-        gt_boxes = NormBoxesGraph()(input_gt_boxes, tf.shape(input_image)[1:3])
+        gt_boxes = NormBoxesGraph()(tf.cast(input_gt_boxes,tf.float32), tf.shape(input_image)[1:3])
 
-        input_prn_images = KL.Input(shape=[self.config.NUM_CLASSES-1, *self.config.PRN_IMAGE_SIZE, 4], name="train_input_prn_images", dtype=tf.float32)
-
-        prn_images = PrnBackground(self.config)(input_image, input_gt_boxes, input_prn_images)
-        attentions = self.prn_model(prn_images)
-        attentions = tf.reduce_mean(attentions, 0) # [NUM_CLASSES, FC_LAYERS_SIZE]
         attention_score = self.meta_cls_score(attentions)
 
         backbone_output = self.backbone(input_image)
@@ -271,10 +331,10 @@ class MetaFasterRcnn(FasterRcnn):
         # Convert from list of lists of level outputs to list of lists
         # of outputs across levels.
         # e.g. [[a1, b1, c1], [a2, b2, c2]] => [[a1, a2], [b1, b2], [c1, c2]]
-        outputs = list(zip(*layer_outputs))
-        outputs = [c(list(o)) for o, c in zip(outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
+        rpn_outputs = list(zip(*layer_outputs))
+        rpn_outputs = [c(list(o)) for o, c in zip(rpn_outputs, [KL.Concatenate(axis=1, name=n) for n in ["rpn_class_logits", "rpn_class", "rpn_bbox"]])]
 
-        rpn_class_logits, rpn_class, rpn_bbox = outputs
+        rpn_class_logits, rpn_class, rpn_bbox = rpn_outputs
 
         # Generate proposals
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
@@ -310,17 +370,28 @@ class MetaFasterRcnn(FasterRcnn):
         bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
         meta_loss = MetaClassLoss(name='meta_class_loss')(attention_score)
 
-        # Model
-        inputs = [input_image, input_gt_boxes, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids, input_prn_images]
-        outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, meta_loss]
+        outputs = self.default_outputs.replace_data({
+            'rpn_class_loss':rpn_class_loss, 
+            'rpn_bbox_loss':rpn_bbox_loss, 
+            'class_loss':class_loss, 
+            'bbox_loss':bbox_loss, 
+            'meta_loss':meta_loss})
 
-        model = keras.Model(inputs, outputs, name='train_model')
-        return model
+        return outputs
 
 
-    def make_prn_model(self, config: Config):
-        input_image = KL.Input(config.PRN_IMAGE_SIZE+(4,), name='prn_input', dtype=tf.float32)
-        x = self.meta_input_conv1(input_image)
+    @tf.function
+    def forward_timedist_prn(self, input_image, input_gt_boxes, batch_prn_images):
+        prn_images = PrnBackground(self.config)([input_image, input_gt_boxes, batch_prn_images])
+        batch_attentions = tf.vectorized_map(self.forward_prn,prn_images)
+        attentions = tf.reduce_mean(batch_attentions, 0) # [NUM_CLASSES, FC_LAYERS_SIZE]
+        output = self.default_outputs.replace_data({'attentions':attentions})
+        return output
+
+
+    @tf.function
+    def forward_prn(self, input_prn_image):
+        x = self.meta_input_conv1(input_prn_image)
         backbone_output = self.backbone(x)
         prn_P2, prn_P3, prn_P4, prn_P5, prn_P6 = self.neck(*backbone_output)
 
@@ -334,6 +405,4 @@ class MetaFasterRcnn(FasterRcnn):
         attentions = self.attention_batchnorm(attentions)
         attentions = KL.Activation(tf.nn.sigmoid)(attentions)
 
-        model = keras.Model(inputs=input_image, outputs=attentions, name='prn')
-        return model
-        
+        return attentions
