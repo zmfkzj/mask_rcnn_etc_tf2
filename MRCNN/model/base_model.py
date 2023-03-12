@@ -51,7 +51,6 @@ class BaseModel(KM.Model):
     
         self.backbone = self.make_backbone_model(config)
     
-
     def compile(self, dataset:Dataset, 
                 active_class_ids:list[int], 
                 iou_thresh: float = 0.5, 
@@ -69,7 +68,7 @@ class BaseModel(KM.Model):
         self.active_class_ids = active_class_ids
         self.iou_thresh = iou_thresh
         self.loss_weights = loss_weights
-        self.optimizer:keras.optimizers.Optimizer = optimizer
+        # self.optimizer:keras.optimizers.Optimizer = optimizer
         dummy_data = InputDatas(
             input_gt_boxes = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES,4]),
             dataloader_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES],dtype=tf.int64),
@@ -86,6 +85,7 @@ class BaseModel(KM.Model):
         )
         self(dummy_data,Mode.TRAIN.value)
         self.set_trainable(train_layers)
+        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
 
     
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):

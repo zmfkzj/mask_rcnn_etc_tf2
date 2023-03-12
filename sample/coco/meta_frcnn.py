@@ -25,8 +25,8 @@ config = Config(GPUS=0,
                 TRAIN_IMAGES_PER_GPU=2,
                 TEST_IMAGES_PER_GPU=10,
                 PRN_IMAGES_PER_GPU=1,
-                STEPS_PER_EPOCH=10,
-                VALIDATION_STEPS=5,
+                STEPS_PER_EPOCH=2000,
+                VALIDATION_STEPS=50,
                 NOVEL_CLASSES=(89,80,14,23),
                 SHOTS=0,
                 )
@@ -43,7 +43,6 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
                 lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
                 lambda : super_lr)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 10*config.STEPS_PER_EPOCH,0.9,1, staircase=True)
 
 augmentations = iaa.Sequential([
     iaa.Fliplr(0.5),
@@ -62,19 +61,25 @@ val_dataset = Dataset('/home/tmdocker/host/dataset/coco/annotations/instances_va
 if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
 
-
-train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1)
-val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
-
 with config.STRATEGY.scope():
     model = MetaFasterRcnn(config)
 
-    optimizer = keras.optimizers.Nadam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
-    model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer)
+
+
+###########################
+# phase 1 - heads train
+###########################
+train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1, batch_size=10, prn_batch_size=1)
+val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
+
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 20*config.STEPS_PER_EPOCH,0.9,1, staircase=True)
+with config.STRATEGY.scope():
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.HEADS)
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fine_tune/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fine_tune'),
-            keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max', start_from_epoch=40)]
+            keras.callbacks.EarlyStopping('val_mAP50',patience=2,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
         epochs=300000,
@@ -84,18 +89,43 @@ model.fit(iter(train_loader),
         validation_steps=config.VALIDATION_STEPS)
 
 
+###########################
+# phase 1 - finetune
+###########################
+train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1)
+val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
+
+lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 20*config.STEPS_PER_EPOCH,0.9,1, staircase=True)
+with config.STRATEGY.scope():
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+    model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.HEADS)
+
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fine_tune/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+            keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fine_tune'),
+            keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max',restore_best_weights=True)]
+
+model.fit(iter(train_loader), 
+        epochs=300000,
+        callbacks=callbacks,
+        validation_data=iter(val_loader), 
+        steps_per_epoch=config.STEPS_PER_EPOCH,
+        validation_steps=config.VALIDATION_STEPS)
+
+
+###########################
+# phase 2
+###########################
 train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=2)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=2)
 
+lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 20*config.STEPS_PER_EPOCH,0.9,1, staircase=True)
 with config.STRATEGY.scope():
-    model = MetaFasterRcnn(config)
-
-    optimizer = keras.optimizers.Nadam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule/10, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer)
 
 callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fine_tune/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fine_tune'),
-            keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max', start_from_epoch=40)]
+            keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
         epochs=300000,

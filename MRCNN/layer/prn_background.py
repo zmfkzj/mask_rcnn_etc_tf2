@@ -13,7 +13,6 @@ class PrnBackground(KL.Layer):
 
 
     def call(self, inputs):
-        print('trace')
         input_images, gt_boxes, input_prn_images = inputs
         gt_boxes = tf.cast(tf.math.round(gt_boxes), tf.int32)
         prn_batch_size = tf.shape(input_prn_images)[0]

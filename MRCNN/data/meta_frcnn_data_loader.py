@@ -56,6 +56,8 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
     phase:int=1
     attentions:Optional[str] = None
+    batch_size:Optional[int] = None
+    prn_batch_size:Optional[int] = None
 
     def __hash__(self) -> int:
         return hash((tuple(self.config.ACTIVE_CLASS_IDS) if self.config.ACTIVE_CLASS_IDS is not None else None, 
@@ -100,7 +102,8 @@ class DataLoader(frcnn_data_loader.DataLoader):
             coco = self.dataset.coco
 
         if self.mode == Mode.TRAIN:
-            self.batch_size = self.config.TRAIN_BATCH_SIZE
+            self.batch_size = self.config.TRAIN_BATCH_SIZE if self.batch_size is None else self.batch_size
+            self.prn_batch_size = self.config.PRN_BATCH_SIZE if self.prn_batch_size is None else self.prn_batch_size
 
             if self.config.ACTIVE_CLASS_IDS is None:
                 if self.phase == 1:
@@ -156,7 +159,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
             prn_dataset = tf.data.Dataset\
                 .zip(tuple(prn_datasets))\
                 .map(lambda *prn_images: tf.stack(prn_images, 0), num_parallel_calls=tf.data.AUTOTUNE)\
-                .batch(self.config.PRN_IMAGES_PER_GPU*self.config.GPU_COUNT)
+                .batch(self.prn_batch_size)
             
 
             self.data_loader = tf.data.Dataset\
@@ -185,7 +188,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
 
         elif self.mode == Mode.PREDICT:
-            self.batch_size = self.config.TEST_BATCH_SIZE
+            self.batch_size = self.config.TEST_BATCH_SIZE if self.batch_size is None else self.batch_size
 
             if isinstance(self.image_pathes, str):
                 self.image_pathes = [self.image_pathes]
@@ -233,7 +236,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 .prefetch(tf.data.AUTOTUNE)
         
         else: # Test
-            self.batch_size = self.config.TEST_BATCH_SIZE
+            self.batch_size = self.config.TEST_BATCH_SIZE if self.batch_size is None else self.batch_size
 
             if self.attentions is not None:
                 with open(self.attentions, 'rb') as f:
