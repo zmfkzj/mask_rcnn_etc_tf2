@@ -228,7 +228,7 @@ class BaseModel(KM.Model):
             final_rois, final_class_ids, final_scores, final_masks =\
                 unmold_detections(detections[b], 
                                     origin_image_shapes[b], 
-                                    tf.constant([self.config.IMAGE_MAX_DIM, self.config.IMAGE_MAX_DIM, 3]), 
+                                    self.config.IMAGE_SHAPE, 
                                     window[b],
                                     mrcnn_mask=mrcnn_mask[b] if mrcnn_mask is not None else None)
 
