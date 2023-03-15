@@ -25,8 +25,8 @@ config = Config(GPUS=0,
                 TRAIN_IMAGES_PER_GPU=2,
                 TEST_IMAGES_PER_GPU=10,
                 PRN_IMAGES_PER_GPU=1,
-                STEPS_PER_EPOCH=2000,
-                VALIDATION_STEPS=50,
+                STEPS_PER_EPOCH=2,
+                VALIDATION_STEPS=5,
                 NOVEL_CLASSES=(89,80,14,23),
                 SHOTS=0,
                 )
@@ -63,13 +63,13 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 with config.STRATEGY.scope():
     model = MetaFasterRcnn(config)
-    model.load_weights('save_2023-03-13T03:22:14.336644/chpt/fine_tune/best')
+    model.load_weights('save_2023-03-13T13:33:03.821966/chpt/phase1/fpn_p/best')
 
 
 ###########################
 # phase 1 - FPN+ train
 ###########################
-train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1, batch_size=10, prn_batch_size=1)
+train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1, batch_size=8, prn_batch_size=1)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
 
 lr_schedule = CustomScheduler(config.LEARNING_RATE, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
@@ -83,7 +83,7 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1/fpn_p/best
             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
-        epochs=300000,
+        epochs=1,
         callbacks=callbacks,
         validation_data=iter(val_loader), 
         steps_per_epoch=config.STEPS_PER_EPOCH,

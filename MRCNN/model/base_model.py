@@ -68,7 +68,6 @@ class BaseModel(KM.Model):
         self.active_class_ids = active_class_ids
         self.iou_thresh = iou_thresh
         self.loss_weights = loss_weights
-        # self.optimizer:keras.optimizers.Optimizer = optimizer
         dummy_data = InputDatas(
             input_gt_boxes = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES,4]),
             dataloader_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES],dtype=tf.int64),

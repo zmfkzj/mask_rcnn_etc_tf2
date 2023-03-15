@@ -90,7 +90,7 @@ class MetaFasterRcnn(FasterRcnn):
         return {}
 
 
-    def train_step(self, data):
+    def train_step(self, data, optim):
         input_data:InputDatas = data[0]
         with tf.GradientTape() as tape:
             outputs:Outputs = self(input_data, Mode.TRAIN.value)
@@ -112,9 +112,8 @@ class MetaFasterRcnn(FasterRcnn):
                     meta_loss         * self.loss_weights.meta_loss]
 
         gradients = tape.gradient(losses, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        optim.apply_gradients(zip(gradients, self.trainable_variables))
 
-        # losses = [loss/self.config.GPU_COUNT for loss in losses]
         mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, meta_loss = losses
         return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'meta_loss':meta_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
@@ -126,9 +125,8 @@ class MetaFasterRcnn(FasterRcnn):
         return outputs.attentions
 
 
-    @tf.function
-    def custom_train_function(self, dist_inputs):
-        losses = self.distribute_strategy.run(self.train_step, args=(dist_inputs,))
+    def custom_train_function(self, dist_inputs, optim):
+        losses = self.distribute_strategy.run(self.train_step, args=(dist_inputs,optim))
         mean_losses = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, losses,axis=None)
         return mean_losses
 
@@ -160,6 +158,8 @@ class MetaFasterRcnn(FasterRcnn):
                     epochs=epochs,
                 )
             self.stop_training = False
+            train_data = next(x)
+            train_function = tf.function(self.custom_train_function).get_concrete_function(train_data,self.optimizer)
 
             callbacks.on_train_begin()
             for epoch in range(epochs):
@@ -168,7 +168,7 @@ class MetaFasterRcnn(FasterRcnn):
                 pbar = keras.utils.Progbar(target=self.config.STEPS_PER_EPOCH)
                 for train_step,data in enumerate(x):
                     callbacks.on_train_batch_begin(train_step)
-                    train_logs = self.custom_train_function(data)
+                    train_logs = train_function(data)
                     pbar.update(train_step,train_logs.items(), finalize=False)
                     callbacks.on_train_batch_end(train_step+1, train_logs)
                     if train_step==steps_per_epoch:
