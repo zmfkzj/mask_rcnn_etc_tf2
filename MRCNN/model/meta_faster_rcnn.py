@@ -1,47 +1,24 @@
 import copy
+from typing import Callable
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import tensorflow as tf
-import tensorflow_models as tfm
 import numpy as np
 from keras.utils import tf_utils
 
 from MRCNN.config import Config
-from MRCNN.data.meta_frcnn_data_loader import InputDatas
+from MRCNN.data.input_datas import InputDatas
 from MRCNN.enums import EvalType, Mode
 from MRCNN.layer.prn_background import PrnBackground
 from MRCNN.loss import (MetaClassLoss, MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
-from MRCNN.model.base_model import BaseModel
 from MRCNN.model.faster_rcnn import FasterRcnn
-from MRCNN.model.meta_fpn_head import FPN_classifier
+from MRCNN.model.outputs import Outputs, OutputsArgs
 
 from ..layer import DetectionLayer, FrcnnTarget, ProposalLayer
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
-from . import RPN, meta_FPN_classifier, Neck
+from . import meta_FPN_classifier
 
-
-class Outputs(tf.experimental.ExtensionType):
-    detections: tf.Tensor
-    attentions: tf.Tensor
-    attentions_logits: tf.Tensor
-    rpn_class_loss: tf.Tensor
-    rpn_bbox_loss: tf.Tensor
-    class_loss: tf.Tensor
-    bbox_loss: tf.Tensor
-    meta_loss: tf.Tensor
-
-    def replace_data(self, new_dict):
-        args = {'detections':self.detections,
-                'attentions':self.attentions, 
-                'attentions_logits':self.attentions_logits, 
-                'rpn_class_loss':self.rpn_class_loss, 
-                'rpn_bbox_loss':self.rpn_bbox_loss, 
-                'class_loss':self.class_loss, 
-                'bbox_loss':self.bbox_loss, 
-                'meta_loss':self.meta_loss}
-        args.update(new_dict)
-        return Outputs(**args)
 
 
 class MetaFasterRcnn(FasterRcnn):
@@ -50,50 +27,35 @@ class MetaFasterRcnn(FasterRcnn):
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, config:Config, eval_type=EvalType.BBOX):
+    def __init__(self, config:Config, eval_type=EvalType.BBOX, name='meta_frcnn'):
         """
         config: A Sub-class of the Config class
         """
-        # super(BaseModel, self).__init__(name='faster_rcnn') # keras.Model.__init__
-        # self.build_parts(config)
-        # super(FasterRcnn, self).__init__(config, EvalType.BBOX) # BaseModel.__init__
-        super().__init__(config, eval_type)
+        super().__init__(config, eval_type, name)
         self.meta_input_conv1 = KL.Conv2D(3,(1,1), name='meta_input_conv1')
         self.attention_fc = KL.Dense(config.FPN_CLASSIF_FC_LAYERS_SIZE, name="meta_attention")
         self.attention_batchnorm = KL.BatchNormalization(name='meta_bachnorm_1')
         self.meta_cls_score = KL.Dense(config.NUM_CLASSES, name='meta_score')
         self.fpn_classifier = meta_FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
-        self.default_outputs = Outputs(
-            detections = tf.zeros([self.config.MAX_GT_INSTANCES,6], dtype=tf.float32),
-            attentions = tf.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE], tf.float32),
-            attentions_logits = tf.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE], tf.float32),
-            rpn_class_loss = tf.constant(0., tf.float32),
-            rpn_bbox_loss = tf.constant(0., tf.float32),
-            class_loss = tf.constant(0., tf.float32),
-            bbox_loss = tf.constant(0., tf.float32),
-            meta_loss = tf.constant(0., tf.float32)
-            )
 
 
     def predict_step(self, data):
-        input_data:InputDatas = data[0]
-        outputs:Outputs = self(input_data, Mode.PREDICT.value)
-
+        input_data:InputDatas = InputDatas(self.config, **data[0])
+        outputs:Outputs = self(data[0])
         return outputs.detections,input_data.origin_image_shapes, input_data.input_window, input_data.pathes
 
 
     def test_step(self, data):
-        input_data:InputDatas = data[0]
-        outputs:Outputs = self(input_data, Mode.TEST.value)
+        input_data:InputDatas = InputDatas(self.config, **data[0])
+        outputs:Outputs = self(data[0])
         tf.py_function(self.build_coco_results, (input_data.image_ids, outputs.detections, input_data.origin_image_shapes, input_data.input_window), ())
         return {}
 
 
     def train_step(self, data, optim):
-        input_data:InputDatas = data[0]
         with tf.GradientTape() as tape:
-            outputs:Outputs = self(input_data, Mode.TRAIN.value)
+            outputs:Outputs = self(data[0])
 
             rpn_class_loss = outputs.rpn_class_loss
             rpn_bbox_loss = outputs.rpn_bbox_loss
@@ -120,8 +82,7 @@ class MetaFasterRcnn(FasterRcnn):
 
 
     def prn_step(self, data):
-        input_data:InputDatas = data[0]
-        outputs:Outputs = self(input_data, Mode.PRN.value)
+        outputs:Outputs = self(data[0])
         return outputs.attentions
 
 
@@ -159,11 +120,13 @@ class MetaFasterRcnn(FasterRcnn):
                 )
             self.stop_training = False
             train_data = next(x)
+            self.set_call_function(Mode.TRAIN)
             train_function = tf.function(self.custom_train_function).get_concrete_function(train_data,self.optimizer)
 
             callbacks.on_train_begin()
             for epoch in range(epochs):
                 self.reset_metrics()
+                self.set_call_function(Mode.TRAIN)
                 callbacks.on_epoch_begin(epoch)
                 pbar = keras.utils.Progbar(target=self.config.STEPS_PER_EPOCH)
                 for train_step,data in enumerate(x):
@@ -189,6 +152,7 @@ class MetaFasterRcnn(FasterRcnn):
                 epoch_logs = copy.copy(train_logs)
                 
 
+                self.set_call_function(Mode.PRN)
                 cls_attentions_sum = np.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE])
                 cls_attentions_cnt = 0
                 for attentions_step,data in enumerate(x):
@@ -200,6 +164,7 @@ class MetaFasterRcnn(FasterRcnn):
                 attentions = cls_attentions_sum/cls_attentions_cnt
 
 
+                self.set_call_function(Mode.TEST)
                 if validation_data is not None:
                     callbacks.on_test_begin()
                     self.param_image_ids.clear()
@@ -207,7 +172,7 @@ class MetaFasterRcnn(FasterRcnn):
                     for test_step,data in enumerate(validation_data):
                         callbacks.on_test_batch_begin(test_step)
                         input_datas:InputDatas = data[0]
-                        input_datas = input_datas.replace_data({'attentions':tf.cast(attentions, tf.float32)})
+                        input_datas = input_datas.update_attentions(tf.cast(attentions, tf.float32))
 
                         self.custom_test_function([input_datas])
 
@@ -232,34 +197,31 @@ class MetaFasterRcnn(FasterRcnn):
             callbacks.on_train_end(logs=epoch_logs)
 
 
-    def call(self, input_datas:InputDatas, mode:str) -> Outputs:
-        if mode in [Mode.PREDICT.value, Mode.TEST.value]:
-            outputs:Outputs = self.forward_predict_test(input_datas.input_images,
-                                                input_datas.input_window,
-                                                input_datas.attentions)
-        elif mode==Mode.TRAIN.value:
-            outputs:Outputs = self.forward_timedist_prn(input_datas.input_images, 
-                                               input_datas.input_gt_boxes,
-                                               input_datas.prn_images)
-            attention_score = self.meta_cls_score(outputs.attentions_logits)
-            meta_loss = MetaClassLoss(name='meta_class_loss')(attention_score)
-
-            outputs:Outputs = self.forward_train(input_datas.input_images,
-                                         input_datas.active_class_ids,
-                                         input_datas.rpn_match,
-                                         input_datas.rpn_bbox,
-                                         input_datas.dataloader_class_ids,
-                                         input_datas.input_gt_boxes,
-                                         outputs.attentions)
-            outputs:Outputs = outputs.replace_data({'meta_loss':meta_loss})
-        elif mode == Mode.PRN.value:
-            outputs = self.forward_timedist_prn(input_datas.input_images, 
-                                               input_datas.input_gt_boxes,
-                                               input_datas.prn_images)
+    def set_call_function(self, mode: Mode):
+        if mode in [Mode.PREDICT, Mode.TEST]:
+            self.call_function:Callable[[InputDatas], Outputs] = \
+                lambda input_datas: \
+                    self.forward_predict_test(input_datas.input_images,
+                                            input_datas.input_window,
+                                            input_datas.attentions)
+        elif mode==Mode.TRAIN:
+            self.call_function:Callable[[InputDatas], Outputs] = \
+                lambda input_datas: \
+                    self.forward_train(input_datas.input_images,
+                                        input_datas.active_class_ids,
+                                        input_datas.rpn_match,
+                                        input_datas.rpn_bbox,
+                                        input_datas.dataloader_class_ids,
+                                        input_datas.input_gt_boxes,
+                                        input_datas.prn_images)
+        elif mode == Mode.PRN:
+            self.call_function:Callable[[InputDatas], Outputs] = \
+                lambda input_datas: \
+                    self.forward_timedist_prn(input_datas.input_images, 
+                                            input_datas.input_gt_boxes, 
+                                            input_datas.prn_images)
         else:
-            outputs = Outputs()
             ValueError('argument mode must be one of predict, test, train, or prn.')
-        return outputs
 
 
     @tf.function
@@ -306,12 +268,30 @@ class MetaFasterRcnn(FasterRcnn):
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, input_attentions, training=False)
         detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, tf.cast(input_window, tf.float32))
 
-        outputs = self.default_outputs.replace_data({'detections':detections})
-        return outputs
+        return Outputs.from_args(OutputsArgs(self.config,detections=detections))
 
     
     @tf.function
-    def forward_train(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, attentions):
+    def forward_train(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, prn_images):
+        outputs:Outputs = self.forward_timedist_prn(input_image, 
+                                            input_gt_boxes,
+                                            prn_images)
+        attention_score = self.meta_cls_score(outputs.attentions_logits)
+        meta_loss = MetaClassLoss(name='meta_class_loss')(attention_score)
+
+        outputs:Outputs = self.forward_frcnn(input_image,
+                                        active_class_ids,
+                                        input_rpn_match,
+                                        input_rpn_bbox,
+                                        input_gt_class_ids,
+                                        input_gt_boxes,
+                                        outputs.attentions)
+        outputs:Outputs = outputs.update_meta_loss(meta_loss)
+        return outputs
+
+
+    @tf.function
+    def forward_frcnn(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, attentions):
         # Normalize coordinates
         gt_boxes = NormBoxesGraph()(tf.cast(input_gt_boxes,tf.float32), tf.shape(input_image)[1:3])
 
@@ -372,13 +352,11 @@ class MetaFasterRcnn(FasterRcnn):
         class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
         bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
 
-        outputs = self.default_outputs.replace_data({
-            'rpn_class_loss':rpn_class_loss, 
-            'rpn_bbox_loss':rpn_bbox_loss, 
-            'class_loss':class_loss, 
-            'bbox_loss':bbox_loss})
-
-        return outputs
+        return Outputs.from_args(OutputsArgs(self.config,
+                                             rpn_class_loss=rpn_class_loss,
+                                             rpn_bbox_loss=rpn_bbox_loss,
+                                             class_loss=class_loss,
+                                             bbox_loss=bbox_loss))
 
 
     @tf.function
@@ -387,8 +365,9 @@ class MetaFasterRcnn(FasterRcnn):
         batch_attentions_logits, batch_attentions = tf.vectorized_map(self.forward_prn,prn_images)
         attentions_logits = tf.reduce_mean(batch_attentions_logits, 0) # [NUM_CLASSES, FC_LAYERS_SIZE]
         attentions = tf.reduce_mean(batch_attentions, 0) # [NUM_CLASSES, FC_LAYERS_SIZE]
-        output = self.default_outputs.replace_data({'attentions':attentions, 'attentions_logits':attentions_logits})
-        return output
+        return Outputs.from_args(OutputsArgs(self.config,
+                                             attentions=attentions,
+                                             attentions_logits=attentions_logits))
 
 
     @tf.function

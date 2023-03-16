@@ -10,6 +10,7 @@ from imgaug.augmentables.bbs import BoundingBoxesOnImage
 from imgaug.augmenters import Sequential
 
 from MRCNN.config import Config
+from MRCNN.data.input_datas import InputDatas
 from MRCNN.enums import Mode
 from MRCNN.data.dataset import Dataset
 from MRCNN.utils import (compute_backbone_shapes,
@@ -23,6 +24,7 @@ class DataLoader:
     dataset:Optional[Dataset] = None
     image_pathes:Optional[Union[str,list[str]]] = None
     augmentations:Optional[Sequential] = None
+    batch_size:Optional[int] = None
 
     def __post_init__(self):
         backbone_shapes = compute_backbone_shapes(self.config)
@@ -33,108 +35,130 @@ class DataLoader:
                             self.config.BACKBONE_STRIDES,
                             self.config.RPN_ANCHOR_STRIDE)
         
+        self.make_dataloader()
+    
 
-        
-        if self.mode in [Mode.TRAIN, Mode.TEST]:
-            coco = self.dataset.coco
-
-        if self.mode == Mode.TRAIN:
-            self.batch_size = self.config.TRAIN_BATCH_SIZE
-
-            if self.config.ACTIVE_CLASS_IDS is None:
-                self.active_class_ids = [cat for cat in self.dataset.coco.cats if  cat not in self.config.NOVEL_CLASSES]
-            else:
-                self.active_class_ids = self.config.ACTIVE_CLASS_IDS
-
-            path = tf.data.Dataset\
-                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
-
-            ann_ids = [self.padding_ann_ids(coco.getAnnIds(img['id'], self.active_class_ids)) 
-                       for img in coco.dataset['images']]
-            ann_ids = tf.data.Dataset.from_tensor_slices(ann_ids)
-
-            self.data_loader = tf.data.Dataset\
-                .zip((path, ann_ids))\
-                .shuffle(len(self.dataset))\
-                .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-
-            active_dataloader_class_ids = [0]+[self.dataset.get_dataloader_class_id(id) for id in self.active_class_ids]
-            num_classes = len(coco.dataset['categories'])+1
-            active_classes = [1 if dataloader_class_id in active_dataloader_class_ids else 0 for dataloader_class_id in range(num_classes)]
-
-            active_classes_dataset = tf.data.Dataset\
-                .from_tensors(active_classes)\
-                .repeat()
-
-            self.data_loader = tf.data.Dataset\
-                .zip((self.data_loader, active_classes_dataset))\
-                .map(lambda datas, active_class_id: [*datas, active_class_id],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .batch(self.batch_size)\
-                .map(lambda *datas: [datas],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .repeat()\
-                .prefetch(tf.data.AUTOTUNE)
-
-        elif self.mode == Mode.PREDICT:
-            self.batch_size = self.config.TEST_BATCH_SIZE
-
-            if isinstance(self.image_pathes, str):
-                self.image_pathes = [self.image_pathes]
-            
-            pathes = []
-            for p in self.image_pathes:
-                if os.path.isdir(p):
-                    for r,_,fs in os.walk(p):
-                        for f in fs:
-                            if Path(f).suffix.lower() in ['.jpg', '.jpeg','.png']:
-                                full_path = Path(r)/f
-                                pathes.append(str(full_path))
-                elif os.path.isfile(p):
-                    if Path(p).suffix.lower() in ['.jpg', '.jpeg','.png']:
-                        pathes.append(p)
-                else:
-                    raise FileNotFoundError(f'{p}를 찾을 수 없습니다.')
-                
-            self.data_loader = tf.data.Dataset\
-                .from_tensor_slices(pathes)\
-                .map(lambda p: self.preprocessing_predict(p), num_parallel_calls=tf.data.AUTOTUNE)\
-                .batch(self.batch_size)\
-                .map(lambda *datas: [datas],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .prefetch(tf.data.AUTOTUNE)
-        
+    def make_dataloader(self):
+        if self.mode == Mode.PREDICT:
+            self.data_loader = self.make_predict_dataloader()
+        elif self.mode == Mode.TEST:
+            self.data_loader = self.make_test_dataloader()
+        elif self.mode == Mode.TRAIN:
+            self.data_loader = self.make_train_dataloader()
         else:
-            self.batch_size = self.config.TEST_BATCH_SIZE
-
-            pathes = tf.data.Dataset\
-                .from_tensor_slices([img['path'] for img in coco.dataset['images']])
-            img_ids = tf.data.Dataset\
-                .from_tensor_slices([img['id'] for img in coco.dataset['images']])
+            ValueError
 
 
-            self.data_loader = tf.data.Dataset\
-                .zip((pathes,img_ids))\
-                .shuffle(len(self.dataset))\
-                .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
-                .batch(self.batch_size)\
-                .map(lambda *datas: [datas],
-                     num_parallel_calls=tf.data.AUTOTUNE)\
-                .repeat()\
-                .prefetch(tf.data.AUTOTUNE)
+    def make_predict_dataloader(self):
+        self.batch_size = self.config.TEST_BATCH_SIZE if self.batch_size is None else self.batch_size
+
+        if isinstance(self.image_pathes, str):
+            self.image_pathes = [self.image_pathes]
+        
+        pathes = []
+        for p in self.image_pathes:
+            if os.path.isdir(p):
+                for r,_,fs in os.walk(p):
+                    for f in fs:
+                        if Path(f).suffix.lower() in ['.jpg', '.jpeg','.png']:
+                            full_path = Path(r)/f
+                            pathes.append(str(full_path))
+            elif os.path.isfile(p):
+                if Path(p).suffix.lower() in ['.jpg', '.jpeg','.png']:
+                    pathes.append(p)
+            else:
+                raise FileNotFoundError(f'{p}를 찾을 수 없습니다.')
+            
+        data_loader = tf.data.Dataset\
+            .from_tensor_slices(pathes)\
+            .map(lambda p: self.preprocessing_predict(p), num_parallel_calls=tf.data.AUTOTUNE)\
+            .batch(self.batch_size)\
+            .map(lambda datas: 
+                    [InputDatas(self.config, self.anchors.shape[0], **datas).to_dict()],
+                    num_parallel_calls=tf.data.AUTOTUNE)\
+            .prefetch(tf.data.AUTOTUNE)
+        return data_loader
+    
+
+    def make_test_dataloader(self):
+        coco = self.dataset.coco
+        self.batch_size = self.config.TEST_BATCH_SIZE if self.batch_size is None else self.batch_size
+
+        pathes = tf.data.Dataset\
+            .from_tensor_slices([img['path'] for img in coco.dataset['images']])
+        img_ids = tf.data.Dataset\
+            .from_tensor_slices([img['id'] for img in coco.dataset['images']])
+
+
+        data_loader = tf.data.Dataset\
+            .zip((pathes,img_ids))\
+            .shuffle(len(self.dataset))\
+            .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
+            .batch(self.batch_size)\
+            .map(lambda datas: 
+                    [InputDatas(self.config, self.anchors.shape[0], **datas).to_dict()],
+                    num_parallel_calls=tf.data.AUTOTUNE)\
+            .repeat()\
+            .prefetch(tf.data.AUTOTUNE)
+        return data_loader
+
+
+    def make_train_dataloader(self):
+        coco = self.dataset.coco
+        self.batch_size = self.config.TRAIN_BATCH_SIZE if self.batch_size is None else self.batch_size
+
+        self.set_active_class_ids()
+
+
+        path = tf.data.Dataset\
+            .from_tensor_slices([img['path'] for img in coco.dataset['images']])
+
+        ann_ids = [self.padding_ann_ids(coco.getAnnIds(img['id'], self.active_class_ids)) 
+                    for img in coco.dataset['images']]
+        ann_ids = tf.data.Dataset.from_tensor_slices(ann_ids)
+
+        data_loader = tf.data.Dataset\
+            .zip((path, ann_ids))\
+            .repeat()\
+            .shuffle(len(self.dataset))\
+            .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
+                    num_parallel_calls=tf.data.AUTOTUNE)\
+
+        active_classes = [1]+[1 if cat in self.active_class_ids else 0 
+                                for cat in self.active_class_ids]
+
+        active_classes_dataset = tf.data.Dataset\
+            .from_tensors(active_classes)\
+            .repeat()
+
+        data_loader = tf.data.Dataset\
+            .zip((data_loader, active_classes_dataset))\
+            .batch(self.batch_size)\
+            .map(lambda datas, active_class_id: 
+                 [InputDatas(self.config, self.anchors.shape[0],
+                                                     active_class_ids=active_class_id,
+                                                     **datas).to_dict()])\
+            .prefetch(tf.data.AUTOTUNE)
+        return data_loader
+
+
+    def set_active_class_ids(self):
+        if self.config.ACTIVE_CLASS_IDS is None:
+            self.active_class_ids = [cat for cat in self.dataset.coco.cats if  cat not in self.config.NOVEL_CLASSES]
+        else:
+            self.active_class_ids = self.config.ACTIVE_CLASS_IDS
+        return self.active_class_ids
 
 
     def __iter__(self):
         return iter(self.data_loader)
     
+
     def __hash__(self) -> int:
-        return hash((tuple(self.active_class_ids) if self.active_class_ids is not None else None, 
+        return hash((tuple(self.config.ACTIVE_CLASS_IDS) if self.config.ACTIVE_CLASS_IDS is not None else None, 
                      self.mode, 
                      tuple(self.image_pathes) if self.image_pathes is not None else None, 
                      self.dataset))
-
-    
 
     @tf.function
     def preprocessing_predict(self, path):
@@ -142,7 +166,10 @@ class DataLoader:
         resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
         preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
         origin_image_shape = tf.shape(image)
-        return preprocessed_image, window, origin_image_shape, path
+        return {'input_images': preprocessed_image,
+                'input_window': window,
+                'origin_image_shapes':origin_image_shape,
+                'pathes':path}
     
     @tf.function
     def preproccessing_test(self, path, img_id):
@@ -150,7 +177,10 @@ class DataLoader:
         resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
         preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
         origin_image_shape = tf.shape(image)
-        return preprocessed_image, window, origin_image_shape, img_id
+        return {'input_images': preprocessed_image,
+                'input_window': window,
+                'origin_image_shapes':origin_image_shape,
+                'image_ids':img_id}
 
     @tf.function
     def preproccessing_train(self, path, ann_ids):
@@ -185,7 +215,11 @@ class DataLoader:
         resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
         dataloader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(dataloader_class_ids, tf.squeeze(indices, -1)))
 
-        return preprocessed_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox
+        return {'input_images': preprocessed_image,
+                'input_gt_boxes': resized_boxes,
+                'dataloader_class_ids':dataloader_class_ids,
+                'rpn_match':rpn_match,
+                'rpn_bbox':rpn_bbox}
 
 
     def load_gt(self, ann_ids, h, w):
@@ -389,7 +423,7 @@ class DataLoader:
 
         if tf.shape(gt_boxes)[0] == 0:
             rpn_bbox = tf.zeros([self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32)
-            return tf.cast(rpn_match,tf.int64), rpn_bbox
+            return rpn_match, rpn_bbox
 
         # Handle COCO crowds
         # A crowd box in COCO is a bounding box around several instances. Exclude
@@ -491,4 +525,4 @@ class DataLoader:
                                                         ])/self.config.RPN_BBOX_STD_DEV)
         rpn_bbox = rpn_bbox.stack()
 
-        return tf.cast(rpn_match, tf.int64), rpn_bbox
+        return rpn_match, rpn_bbox

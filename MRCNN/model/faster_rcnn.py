@@ -1,13 +1,16 @@
+from typing import Callable
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import tensorflow as tf
 import tensorflow_models as tfm
 
 from MRCNN.config import Config
-from MRCNN.enums import EvalType
+from MRCNN.data.input_datas import InputDatas
+from MRCNN.enums import EvalType, Mode
 from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
 from MRCNN.model.base_model import BaseModel
+from MRCNN.model.outputs import Outputs, OutputsArgs
 
 from ..layer import DetectionLayer, FrcnnTarget, ProposalLayer
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
@@ -19,11 +22,11 @@ class FasterRcnn(BaseModel):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config, eval_type=EvalType.BBOX):
+    def __init__(self, config:Config, eval_type=EvalType.BBOX, name='faster_rcnn'):
         """
         config: A Sub-class of the Config class
         """
-        super().__init__(config, eval_type)
+        super().__init__(config, eval_type, name=name)
         self.neck = Neck(config)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
@@ -32,26 +35,35 @@ class FasterRcnn(BaseModel):
 
     
     def predict_step(self, data):
-        input_images, input_window, origin_image_shapes, pathes = data[0]
-        detections = self.predict_model([input_images, input_window])
-        return detections,origin_image_shapes, input_window, pathes
+        input_datas:InputDatas = InputDatas(self.config, **data[0])
+        outputs:Outputs = self(data[0])
+        return (outputs.detections, 
+                input_datas.origin_image_shapes, 
+                input_datas.input_window, 
+                input_datas.pathes)
 
 
     def test_step(self, data):
-        input_images, input_window, origin_image_shapes, image_ids = data[0]
-        detections = self.test_model([input_images, input_window])
-        tf.py_function(self.build_coco_results, (image_ids, detections, origin_image_shapes, input_window), ())
+        input_datas:InputDatas = InputDatas(self.config, **data[0])
+        outputs:Outputs = self(data[0])
+        tf.py_function(self.build_coco_results, (input_datas.image_ids, 
+                                                 outputs.detections, 
+                                                 input_datas.origin_image_shapes, 
+                                                 input_datas.input_window), ())
         return {}
 
 
     def train_step(self, data):
-        resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
         with tf.GradientTape() as tape:
-            rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss = \
-                self.train_model([resized_image, resized_boxes, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids], training=True)
+            outputs:Outputs =  self(data[0])
+
+            rpn_class_loss = outputs.rpn_class_loss
+            rpn_bbox_loss = outputs.rpn_bbox_loss
+            class_loss = outputs.class_loss
+            bbox_loss = outputs.bbox_loss
 
             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-                            for w in self.train_model.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
+                            for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
             losses = [reg_losses, 
                     rpn_class_loss    * self.loss_weights.rpn_class_loss, 
@@ -59,19 +71,37 @@ class FasterRcnn(BaseModel):
                     class_loss        * self.loss_weights.mrcnn_class_loss, 
                     bbox_loss         * self.loss_weights.mrcnn_bbox_loss]
 
-        gradients = tape.gradient(losses, self.train_model.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.train_model.trainable_variables))
+        gradients = tape.gradient(losses, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         losses = [loss/self.config.GPU_COUNT for loss in losses]
         mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss = losses
         return {'mean_loss':mean_loss,'rpn_class_loss':rpn_class_loss, 'rpn_bbox_loss':rpn_bbox_loss, 'class_loss':class_loss, 'bbox_loss':bbox_loss, 'reg_losses':reg_losses, 'lr':self.optimizer.learning_rate}
+    
+
+    def set_call_function(self, mode:Mode):
+        if mode in [Mode.PREDICT, Mode.TEST]:
+            self.call_function:Callable[[InputDatas],Outputs] = \
+                lambda input_datas: \
+                    self.forward_predict_test(input_datas.input_images, 
+                                              input_datas.input_window)
+
+        elif mode==Mode.TRAIN:
+            self.call_function:Callable[[InputDatas],Outputs] = \
+                lambda input_datas: \
+                    self.forward_train(input_datas.input_images,
+                                         input_datas.active_class_ids,
+                                         input_datas.rpn_match,
+                                         input_datas.rpn_bbox,
+                                         input_datas.dataloader_class_ids,
+                                         input_datas.input_gt_boxes)
+        else:
+            ValueError('argument mode must be one of predict, test or train.')
 
 
-    def make_predict_model(self):
-        input_image = KL.Input(self.config.IMAGE_SHAPE, dtype=tf.uint8, name='predict_input_image')
-        input_window = KL.Input(shape=(4,), name="predict_input_window")
-
+    @tf.function
+    def forward_predict_test(self, input_image, input_window):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
@@ -114,29 +144,11 @@ class FasterRcnn(BaseModel):
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
         detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
 
-        model = keras.Model([input_image, input_window],
-                            detections,
-                            name='predict_model')
-        return model
+        return Outputs.from_args(OutputsArgs(self.config,detections=detections))
 
-    
-    def make_test_model(self):
-        return self.make_predict_model()
-    
 
-    def make_train_model(self):
-        input_image = KL.Input( shape=[None, None, self.config.IMAGE_SHAPE[2]], name="train_input_image")
-        active_class_ids = KL.Input(shape=[self.config.NUM_CLASSES], name="train_input_class_ids")
-        # RPN GT
-        input_rpn_match = KL.Input( shape=[None, 1], name="train_input_rpn_match", dtype=tf.int64)
-        input_rpn_bbox = KL.Input( shape=[None, 4], name="train_input_rpn_bbox", dtype=tf.float32)
-
-        # Detection GT (class IDs, bounding boxes, and masks)
-        # 1. GT Class IDs (zero padded)
-        input_gt_class_ids = KL.Input( shape=[None], name="train_input_gt_class_ids", dtype=tf.int64)
-        # 2. GT Boxes in pixels (zero padded)
-        # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
-        input_gt_boxes = KL.Input( shape=[None, 4], name="train_input_gt_boxes", dtype=tf.float32)
+    @tf.function
+    def forward_train(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes):
         # Normalize coordinates
         gt_boxes = NormBoxesGraph()(input_gt_boxes, tf.shape(input_image)[1:3])
 
@@ -197,9 +209,8 @@ class FasterRcnn(BaseModel):
         class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits, active_class_ids)
         bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
 
-        # Model
-        inputs = [input_image, input_gt_boxes, input_gt_class_ids, input_rpn_match, input_rpn_bbox, active_class_ids]
-        outputs = [rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss]
-
-        model = keras.Model(inputs, outputs, name='train_model')
-        return model
+        return Outputs.from_args(OutputsArgs(self.config,
+                                             rpn_class_loss=rpn_class_loss,
+                                             rpn_bbox_loss=rpn_bbox_loss,
+                                             class_loss=class_loss,
+                                             bbox_loss=bbox_loss))

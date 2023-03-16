@@ -11,7 +11,6 @@ from pydantic import Field
 # Don't use this class directly. Instead, sub-class it and override
 # the configurations you need to change.
 
-
 @dataclass(unsafe_hash=True)
 class Config:
     """Base configuration class. For custom configurations, create a
@@ -231,12 +230,3 @@ class Config:
         self.IMAGE_SHAPE:np.ndarray = np.array([self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, self.IMAGE_CHANNEL_COUNT])
 
         self.NUM_CLASSES = self.NUM_CLASSES - len(self.NOVEL_CLASSES)
-
-
-    def display(self):
-        """Display Configuration values."""
-        print("\nConfigurations:")
-        for a in dir(self):
-            if not a.startswith("__") and not callable(getattr(self, a)):
-                print("{:30} {}".format(a, getattr(self, a)))
-        print("\n")

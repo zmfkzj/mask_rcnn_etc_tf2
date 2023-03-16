@@ -19,7 +19,6 @@ class BatchPackGraph(KL.Layer):
         """Picks different number of values from each row
         in x depending on the values in counts.
         """
-        counts = tf.cast(counts, tf.int32)
         outputs = tf.zeros([0,4],tf.float32)
         for i in tf.range(num_rows):
             tf.autograph.experimental.set_loop_options(shape_invariants=[(outputs, tf.TensorShape([None,4]))])
@@ -47,6 +46,7 @@ class NormBoxesGraph(KL.Layer):
         h, w = tf.split(tf.cast(shape, tf.float32), 2)
         scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
         shift = tf.constant([0., 0., 1., 1.])
+        boxes = tf.cast(boxes, tf.float32)
         return tf.divide(boxes - shift, scale)
 
 

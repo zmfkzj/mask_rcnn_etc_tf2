@@ -64,40 +64,26 @@ class DataLoader(frcnn_data_loader.DataLoader):
 
         minimize_masks = tf.transpose(minimize_masks, [1,2,0])
 
-        return preprocessed_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox
+        return {'input_images': preprocessed_image,
+                'input_gt_boxes': resized_boxes,
+                'dataloader_class_ids':dataloader_class_ids,
+                'rpn_match':rpn_match,
+                'rpn_bbox':rpn_bbox,
+                'input_gt_masks':minimize_masks}
 
 
     @tf.function
     def resize(self, image, bbox, mask):
-        origin_shape = tf.shape(image)
-        resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
-        resized_bbox = self.resize_box(bbox, origin_shape, window)
+        resized_image, resized_bbox = super().resize(image, bbox)
         minimize_mask = self.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
         return resized_image, resized_bbox, minimize_mask
         
 
     def load_ann(self, ann, image_shape):
-        dataloader_class_id = self.dataset.get_dataloader_class_id(ann['category_id'])
-
-        x1,y1,w,h = ann['bbox']
-        box = np.array((y1,x1,y1+h,x1+w))
-
-        y1, x1, y2, x2 = np.round(box)
-        area = (y2-y1)*(x2-x1)
-        if area == 0:
-            print(f'area of {ann["bbox"]} is 0')
-            return None
-
+        box, dataloader_class_id = super().load_ann(ann, image_shape)
         h = image_shape[0]
         w = image_shape[1]
         mask = self.annToMask(ann, h, w)
-
-        if ann['iscrowd']:
-            # Use negative class ID for crowds
-            dataloader_class_id *= -1
-            # For crowd masks, annToMask() sometimes returns a mask
-            # smaller than the given dimensions. If so, resize it.
-
         return box, mask, dataloader_class_id
 
 

@@ -29,7 +29,7 @@ class TestDataLoader(unittest.TestCase):
         dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
                           '/home/tmdocker/host/dataset/5_coco_merge/images')
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, active_class_ids,Mode.PREDICT, 2,
+        loader = DataLoader(config,Mode.PREDICT,
                             image_pathes=['/home/tmdocker/host/dataset/5_coco_merge/images/task_221227 옥천교 gt 1024x1024 분할-2023_01_10_16_06_32-coco 1.0/', 
                                           '/home/tmdocker/host/dataset/5_coco_merge/images/task_금빛노을교 3차 1024x1024 분할 gt-2022_12_14_11_47_56-coco 1.0/'])
         loader = iter(loader)
@@ -43,7 +43,7 @@ class TestDataLoader(unittest.TestCase):
         dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
                           '/home/tmdocker/host/dataset/5_coco_merge/images')
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, active_class_ids, Mode.TEST, 2, dataset=dataset)
+        loader = DataLoader(config, Mode.TEST, dataset=dataset)
         loader = iter(loader)
         print(next(loader))
         print(next(loader))
@@ -62,21 +62,19 @@ class TestDataLoader(unittest.TestCase):
             # iaa.Multiply(per_channel=True),
             # iaa.GammaContrast(per_channel=True)
         ])
-        loader = DataLoader(config, Mode.TRAIN, 2,active_class_ids=active_class_ids, dataset=dataset,augmentations=augmentations)
+        loader = DataLoader(config, Mode.TRAIN, dataset=dataset,augmentations=augmentations)
         loader = iter(loader)
-        print(next(loader))
-        print(next(loader))
-        print(next(loader))
+        i = next(loader)
+        i = next(loader)
+        i = next(loader)
     
 
     def test_build_rpn_targets(self):
         config = Config()
-        # config.RPN_ANCHOR_SCALES =((32,64), (96,192), (256,384), (512,768))
-        # config.RPN_ANCHOR_RATIOS = [0.5, 1, 2]
         dataset = Dataset(self.val_json_path, 
                           self.val_image_path)
         active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
+        loader = DataLoader(config, Mode.TRAIN, dataset=dataset)
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]
             dataloader_class_ids = tf.squeeze(dataloader_class_ids, 0)
@@ -91,25 +89,6 @@ class TestDataLoader(unittest.TestCase):
                 break
 
 
-    def test_processing_train(self):
-        class TestDataLoader(DataLoader):
-            def __post_init__(self):
-                backbone_shapes = compute_backbone_shapes(self.config)
-                self.anchors = generate_pyramid_anchors(
-                                    self.config.RPN_ANCHOR_SCALES,
-                                    self.config.RPN_ANCHOR_RATIOS,
-                                    backbone_shapes,
-                                    self.config.BACKBONE_STRIDES,
-                                    self.config.RPN_ANCHOR_STRIDE)
-
-        config = Config()
-        dataset = Dataset('/home/tmdocker/host/dataset/5_coco_merge/annotations/instances_test.json', 
-                          '/home/tmdocker/host/dataset/5_coco_merge/images')
-        active_class_ids = [cat['id'] for cat in dataset.coco.dataset['categories']]
-        loader = TestDataLoader(config, active_class_ids, Mode.TRAIN, 2, dataset=dataset, shuffle_buffer_size=16)
-        loader.preproccessing_train(dataset.coco.dataset['images'][0]['path'], dataset.coco.getAnnIds(dataset.coco.dataset['images'][0]['id']))
-    
-
     def test_gt_image_match(self):
         config = Config()
         dataset = Dataset(self.val_json_path, 
@@ -118,7 +97,7 @@ class TestDataLoader(unittest.TestCase):
         augmentations = iaa.Sequential([
             iaa.Fliplr(0.5),
         ])
-        loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset, augmentations=augmentations)
+        loader = DataLoader(config, Mode.TRAIN, dataset, augmentations=augmentations)
         # loader = DataLoader(config, Mode.TRAIN, 1, active_class_ids, dataset)
         for i, data in enumerate(loader):
             resized_image, resized_boxes, minimize_masks, dataloader_class_ids,rpn_match, rpn_bbox, active_class_ids = data[0]

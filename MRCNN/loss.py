@@ -75,7 +75,7 @@ class RpnBboxLossGraph(KL.Layer):
         rpn_bbox = tf.gather_nd(rpn_bbox, indices)
 
         # Trim target bounding box deltas to the same length as rpn_bbox.
-        batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int64), axis=1)
+        batch_counts = tf.reduce_sum(tf.cast(tf.equal(rpn_match, 1), tf.int32), axis=1)
         target_bbox = self.batch_pack(target_bbox, batch_counts, batch_size)
 
         loss = self.smooth_l1(target_bbox, rpn_bbox)

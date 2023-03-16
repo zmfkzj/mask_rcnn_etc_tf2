@@ -20,13 +20,6 @@ class TrainLayers(Enum):
     ALL = ".*"
 
 
-class Model(Enum):
-    MRCNN = 'mrcnn'
-    FRCNN = 'frcnn'
-    META_MRCNN = 'meta_mrcnn'
-    META_FRCNN = 'meta_frcnn'
-
-
 class EvalType(Enum):
     BBOX='bbox'
     SEGM='segm'

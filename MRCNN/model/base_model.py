@@ -14,9 +14,10 @@ from tensorflow.python.keras.saving.saved_model.utils import \
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.data.meta_frcnn_data_loader import InputDatas
-from MRCNN.enums import EvalType, Mode, Model, TrainLayers
+from MRCNN.data.input_datas import InputDatas
+from MRCNN.enums import EvalType, Mode, TrainLayers
 from MRCNN.metric import F1Score
+from MRCNN.model.outputs import Outputs
 
 from ..utils import LossWeight, compute_backbone_shapes, unmold_detections
 
@@ -26,13 +27,13 @@ class BaseModel(KM.Model):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config, eval_type:EvalType):
+    def __init__(self, config:Config, eval_type:EvalType, name):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
         model_dir: Directory to save training logs and trained weights
         """
-        super().__init__()
+        super().__init__(name=name)
         self.config = config
         self.strategy = self.config.STRATEGY
         self.eval_type = eval_type
@@ -51,6 +52,7 @@ class BaseModel(KM.Model):
     
         self.backbone = self.make_backbone_model(config)
     
+    
     def compile(self, dataset:Dataset, 
                 active_class_ids:list[int], 
                 iou_thresh: float = 0.5, 
@@ -68,29 +70,34 @@ class BaseModel(KM.Model):
         self.active_class_ids = active_class_ids
         self.iou_thresh = iou_thresh
         self.loss_weights = loss_weights
-        dummy_data = InputDatas(
-            input_gt_boxes = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES,4]),
-            dataloader_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.MAX_GT_INSTANCES],dtype=tf.int64),
-            rpn_match = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.anchors.shape[0]], dtype=tf.int64),
-            rpn_bbox = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.RPN_TRAIN_ANCHORS_PER_IMAGE,4], dtype=tf.float32),
-            active_class_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE,self.config.NUM_CLASSES], dtype=tf.int32),
-            prn_images = tf.zeros([self.config.PRN_BATCH_SIZE,self.config.NUM_CLASSES-1,*self.config.PRN_IMAGE_SIZE, 4], dtype=tf.float32),
-            pathes = tf.zeros([self.config.TRAIN_BATCH_SIZE],dtype=tf.string),
-            input_images = tf.zeros([self.config.TRAIN_BATCH_SIZE, *self.config.IMAGE_SHAPE], dtype=tf.float32),
-            input_window = tf.zeros([self.config.TRAIN_BATCH_SIZE,4], dtype=tf.float32),
-            origin_image_shapes = tf.zeros([self.config.TRAIN_BATCH_SIZE,2], dtype=tf.int32),
-            image_ids = tf.zeros([self.config.TRAIN_BATCH_SIZE], dtype=tf.int32),
-            attentions = tf.zeros([self.config.NUM_CLASSES,self.config.FPN_CLASSIF_FC_LAYERS_SIZE], dtype=tf.float32)
-        )
-        self(dummy_data,Mode.TRAIN.value)
+        dummy_data = InputDatas(self.config, self.anchors.shape[0]).to_dict()
+        self.set_call_function(Mode.TRAIN)
+        self(dummy_data)
         self.set_trainable(train_layers)
         return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
+    
+
+    def set_call_function(self, mode:Mode):
+        self.call_function = None
 
     
+    def call(self, inputs) -> Outputs:
+        input_datas:InputDatas = InputDatas(self.config, **inputs)
+        return self.call_function(input_datas)
+
+    def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose="auto", callbacks=None, validation_split=0, validation_data=None, shuffle=True, class_weight=None, sample_weight=None, initial_epoch=0, steps_per_epoch=None, validation_steps=None, validation_batch_size=None, validation_freq=1, max_queue_size=10, workers=1, use_multiprocessing=False):
+        self.set_call_function(Mode.TRAIN)
+        return super().fit(x, y, batch_size, epochs, verbose, callbacks, validation_split, validation_data, shuffle, class_weight, sample_weight, initial_epoch, steps_per_epoch, validation_steps, validation_batch_size, validation_freq, max_queue_size, workers, use_multiprocessing)
+    
+    def predict(self, x, batch_size=None, verbose="auto", steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False):
+        self.set_call_function(Mode.PREDICT)
+        return super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
+
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
         self.param_image_ids.clear()
         self.val_results.clear()
 
+        self.set_call_function(Mode.TEST)
         super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
 
         mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
@@ -100,18 +107,6 @@ class BaseModel(KM.Model):
         return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
 
     
-    def make_predict_model(self):
-        return 
-
-
-    def make_test_model(self):
-        return 
-
-
-    def make_train_model(self):
-        return
-
-
     def make_backbone_model(self, config: Config):
         backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=list(config.IMAGE_SHAPE), dtype=tf.float32),
                                                  include_top=False,

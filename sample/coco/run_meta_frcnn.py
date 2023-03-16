@@ -13,7 +13,7 @@ import os
 from MRCNN.config import Config
 from MRCNN.data.meta_frcnn_data_loader import DataLoader
 from MRCNN.data.dataset import Dataset
-from MRCNN.enums import EvalType, Model, TrainLayers, Mode
+from MRCNN.enums import EvalType, TrainLayers, Mode
 from MRCNN.model import MetaFasterRcnn
 from MRCNN.utils import LossWeight
 
@@ -63,7 +63,6 @@ if not os.path.isdir(f'save_{now}/chpt'):
 
 with config.STRATEGY.scope():
     model = MetaFasterRcnn(config)
-    model.load_weights('save_2023-03-13T13:33:03.821966/chpt/phase1/fpn_p/best')
 
 
 ###########################
@@ -74,7 +73,6 @@ val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
 
 lr_schedule = CustomScheduler(config.LEARNING_RATE, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
 with config.STRATEGY.scope():
-    model.compile(val_dataset, train_loader.active_class_ids)
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
 
