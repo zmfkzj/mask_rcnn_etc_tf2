@@ -1,4 +1,5 @@
 import datetime
+import pickle
 import imgaug.augmenters as iaa
 import keras.api._v2.keras as keras
 import numpy as np
@@ -62,30 +63,31 @@ if not os.path.isdir(f'save_{now}/chpt'):
     os.makedirs(f'save_{now}/chpt')
 
 with config.STRATEGY.scope():
-    model = MetaFasterRcnn(config)
+    model = MetaFasterRcnn(config,1)
+    model.load_weights('save_2023-03-17T17:11:22.171836/chpt/phase1/all/best')
 
 
 ###########################
 # phase 1 - FPN+ train
 ###########################
-train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1, batch_size=8, prn_batch_size=1)
-val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
+# train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1, batch_size=8, prn_batch_size=1)
+# val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
-with config.STRATEGY.scope():
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
-    model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
+# lr_schedule = CustomScheduler(config.LEARNING_RATE, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
+# with config.STRATEGY.scope():
+#     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
+#     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1/fpn_p/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
-            keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/phase1/fpn_p'),
-            keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
+# callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1/fpn_p/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+#             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/phase1/fpn_p'),
+#             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
-model.fit(iter(train_loader), 
-        epochs=1,
-        callbacks=callbacks,
-        validation_data=iter(val_loader), 
-        steps_per_epoch=config.STEPS_PER_EPOCH,
-        validation_steps=config.VALIDATION_STEPS)
+# model.fit(iter(train_loader), 
+#         epochs=1,
+#         callbacks=callbacks,
+#         validation_data=iter(val_loader), 
+#         steps_per_epoch=config.STEPS_PER_EPOCH,
+#         validation_steps=config.VALIDATION_STEPS)
 
 
 ###########################
@@ -94,14 +96,15 @@ model.fit(iter(train_loader),
 train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=1)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=1)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE/100, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
 with config.STRATEGY.scope():
+    model.compile(val_dataset, train_loader.active_class_ids)
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.ALL)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1/all/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1/all/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/phase1/all'),
-            keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
+            keras.callbacks.EarlyStopping('val_mAP50',patience=20,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
         epochs=300000,
@@ -117,12 +120,15 @@ model.fit(iter(train_loader),
 train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, phase=2)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=2)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 20*config.STEPS_PER_EPOCH,0.5,1, staircase=True)
 with config.STRATEGY.scope():
+    model = MetaFasterRcnn(config, 2)
+    model.load_weights(f'save_{now}/chpt/phase1/all/best.h5',skip_mismatch=True, by_name=True)
+    model.compile(val_dataset, train_loader.active_class_ids)
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase2/all/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase2/all/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/phase2/all'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
@@ -130,9 +136,38 @@ model.fit(iter(train_loader),
         epochs=300000,
         callbacks=callbacks,
         validation_data=iter(val_loader), 
-        steps_per_epoch=config.STEPS_PER_EPOCH,
+        steps_per_epoch=train_dataset.min_class_count//config.PRN_BATCH_SIZE+int(bool(train_dataset.min_class_count%config.PRN_BATCH_SIZE)),
         validation_steps=config.VALIDATION_STEPS)
 
 
+##########################
+# infference attention vector
+##########################
+prn_loader = DataLoader(config, Mode.PRN, dataset=train_dataset,augmentations=augmentations, phase=1)
+attentions = model.predict(iter(prn_loader),
+                           steps=train_dataset.min_class_count//config.PRN_BATCH_SIZE+int(bool(train_dataset.min_class_count%config.PRN_BATCH_SIZE)),
+                           mode=Mode.PRN)
+with open(f'save_{now}/attentions.pk', 'wb') as f:
+    pickle.dump(attentions,f)
+
+
+###########################
+# validate
+###########################
+val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=2, attentions=attentions)
+# or
+# val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset, phase=2, attentions=f'save_2023-03-18T16:34:53.339710/attentions.pk')
+with config.STRATEGY.scope():
+    model.compile(val_dataset, val_loader.active_class_ids)
 result = model.evaluate(iter(val_loader),steps=500)
 print(result)
+
+
+###########################
+# predict
+###########################
+predict_loader = DataLoader(config, Mode.PREDICT, image_pathes=['/home/tmdocker/host/dataset/coco/val2017/'],attentions='save_2023-03-18T16:34:53.339710/attentions.pk')
+#or
+# predict_loader = DataLoader(config, Mode.PREDICT, image_pathes=['/home/tmdocker/host/dataset/coco/val2017/'],attentions=attentions)
+results = model.predict(iter(predict_loader))
+print(results)

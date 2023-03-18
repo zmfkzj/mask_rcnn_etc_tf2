@@ -1,5 +1,6 @@
 import re
 from copy import deepcopy
+from typing import Optional
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
@@ -54,7 +55,7 @@ class BaseModel(KM.Model):
     
     
     def compile(self, dataset:Dataset, 
-                active_class_ids:list[int], 
+                active_class_ids:Optional[list[int]], 
                 iou_thresh: float = 0.5, 
                 optimizer="rmsprop", 
                 train_layers=TrainLayers.ALL,
@@ -91,7 +92,12 @@ class BaseModel(KM.Model):
     
     def predict(self, x, batch_size=None, verbose="auto", steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False):
         self.set_call_function(Mode.PREDICT)
-        return super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
+
+        self.param_image_ids.clear()
+        self.val_results.clear()
+
+        super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
+        return self.val_results
 
     def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
         self.param_image_ids.clear()
@@ -301,3 +307,50 @@ class BaseModel(KM.Model):
             results = [0.]*12
 
         return results # [mAP, mAP50, mAP75, F1_0.1, F1_0.2, F1_0.3, F1_0.4, F1_0.5, F1_0.6, F1_0.7, F1_0.8, F1_0.9]
+
+
+    def build_detection_results(self, pathes, detections, origin_image_shapes, window, mrcnn_mask=None):
+        """
+        Args:
+            image_ids (Tensor): Tensor(shape=[batch_size]).
+            detections (Tensor): Tensor(shape=[batch_size, detection_max_instances, 6]). 6 is (y1, x1, y2, x2, class_id, class_score).
+            origin_image_shapes (Tensor): Tensor(shape=[batch_size, 2]). 2 is (height, width).
+            window (Tensor): Tensor(shape=[batch_size, 4]). 4 is (y1, x1, y2, x2).
+            mrcnn_mask (Tensor, optional): Tensor(shape=[batch_size, detection_max_instances, MASK_SHAPE[0], MASK_SHAPE[1], NUM_CLASSES]).
+        """
+        pathes = pathes.numpy()
+        detections = detections.numpy()
+        origin_image_shapes = origin_image_shapes.numpy()
+        window = window.numpy()
+        if mrcnn_mask is not None:
+            mrcnn_mask = mrcnn_mask.numpy()
+
+        for b in range(pathes.shape[0]):
+            if pathes[b]==0:
+                continue
+
+            final_rois, final_class_ids, final_scores, final_masks =\
+                unmold_detections(detections[b], 
+                                    origin_image_shapes[b], 
+                                    self.config.IMAGE_SHAPE, 
+                                    window[b],
+                                    mrcnn_mask=mrcnn_mask[b] if mrcnn_mask is not None else None)
+
+            # Loop through detections
+            for j in range(final_rois.shape[0]):
+                class_id = final_class_ids[j]
+                score = final_scores[j]
+                bbox = final_rois[j]
+                mask = final_masks[:, :, j] if final_masks is not None else None
+
+
+                result = {
+                    "path": pathes[b],
+                    "category_id": class_id,
+                    "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
+                    "score": score,
+                    'segmentation': maskUtils.encode(np.asfortranarray(mask)) 
+                                    if mrcnn_mask is not None else []
+                    }
+
+                self.val_results.append(result)

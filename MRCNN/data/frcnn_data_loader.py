@@ -84,6 +84,8 @@ class DataLoader:
         coco = self.dataset.coco
         self.batch_size = self.config.TEST_BATCH_SIZE if self.batch_size is None else self.batch_size
 
+        self.set_active_class_ids()
+
         pathes = tf.data.Dataset\
             .from_tensor_slices([img['path'] for img in coco.dataset['images']])
         img_ids = tf.data.Dataset\
@@ -108,7 +110,6 @@ class DataLoader:
         self.batch_size = self.config.TRAIN_BATCH_SIZE if self.batch_size is None else self.batch_size
 
         self.set_active_class_ids()
-
 
         path = tf.data.Dataset\
             .from_tensor_slices([img['path'] for img in coco.dataset['images']])
@@ -135,16 +136,16 @@ class DataLoader:
             .zip((data_loader, active_classes_dataset))\
             .batch(self.batch_size)\
             .map(lambda datas, active_class_id: 
-                 [InputDatas(self.config, self.anchors.shape[0],
-                                                     active_class_ids=active_class_id,
-                                                     **datas).to_dict()])\
+                 [InputDatas(self.config, 
+                             self.anchors.shape[0], 
+                             **datas).update_active_class_ids(active_class_id).to_dict()])\
             .prefetch(tf.data.AUTOTUNE)
         return data_loader
 
 
     def set_active_class_ids(self):
         if self.config.ACTIVE_CLASS_IDS is None:
-            self.active_class_ids = [cat for cat in self.dataset.coco.cats if  cat not in self.config.NOVEL_CLASSES]
+            self.active_class_ids = [cat for cat in self.dataset.coco.cats]
         else:
             self.active_class_ids = self.config.ACTIVE_CLASS_IDS
         return self.active_class_ids

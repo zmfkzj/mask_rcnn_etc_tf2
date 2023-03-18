@@ -12,6 +12,7 @@ from MRCNN.enums import EvalType, Mode
 from MRCNN.layer.prn_background import PrnBackground
 from MRCNN.loss import (MetaClassLoss, MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
+from MRCNN.model.base_model import BaseModel
 from MRCNN.model.faster_rcnn import FasterRcnn
 from MRCNN.model.outputs import Outputs, OutputsArgs
 
@@ -27,10 +28,11 @@ class MetaFasterRcnn(FasterRcnn):
     The actual Keras model is in the keras_model property.
     """
 
-    def __init__(self, config:Config, eval_type=EvalType.BBOX, name='meta_frcnn'):
+    def __init__(self, config:Config, phase, eval_type=EvalType.BBOX, name='meta_frcnn'):
         """
         config: A Sub-class of the Config class
         """
+        config.set_phase(phase)
         super().__init__(config, eval_type, name)
         self.meta_input_conv1 = KL.Conv2D(3,(1,1), name='meta_input_conv1')
         self.attention_fc = KL.Dense(config.FPN_CLASSIF_FC_LAYERS_SIZE, name="meta_attention")
@@ -39,11 +41,11 @@ class MetaFasterRcnn(FasterRcnn):
         self.fpn_classifier = meta_FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
 
-
     def predict_step(self, data):
         input_data:InputDatas = InputDatas(self.config, **data[0])
         outputs:Outputs = self(data[0])
-        return outputs.detections,input_data.origin_image_shapes, input_data.input_window, input_data.pathes
+        tf.py_function(self.build_detection_results, (input_data.pathes, outputs.detections, input_data.origin_image_shapes, input_data.input_window), ())
+        return outputs.attentions
 
 
     def test_step(self, data):
@@ -100,6 +102,13 @@ class MetaFasterRcnn(FasterRcnn):
     
 
     @tf.function
+    def custom_predict_function(self, dist_inputs):
+        output = self.distribute_strategy.run(self.predict_step, args=(dist_inputs,))
+        mean_output = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, output,axis=None)
+        return mean_output
+    
+
+    @tf.function
     def infer_attentions_function(self, dist_inputs):
         batch_attentions = self.distribute_strategy.run(self.prn_step, args=(dist_inputs,))
         attentions = self.distribute_strategy.reduce(tf.distribute.ReduceOp.MEAN, batch_attentions,axis=None)
@@ -107,7 +116,6 @@ class MetaFasterRcnn(FasterRcnn):
     
 
     def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose="auto", callbacks=None, validation_split=0, validation_data=None, shuffle=True, class_weight=None, sample_weight=None, initial_epoch=0, steps_per_epoch=None, validation_steps=None, validation_batch_size=None, validation_freq=1, max_queue_size=10, workers=1, use_multiprocessing=False):
-
         with self.distribute_strategy.scope():
             if not isinstance(callbacks, keras.callbacks.CallbackList):
                 callbacks = keras.callbacks.CallbackList(
@@ -217,7 +225,7 @@ class MetaFasterRcnn(FasterRcnn):
         elif mode == Mode.PRN:
             self.call_function:Callable[[InputDatas], Outputs] = \
                 lambda input_datas: \
-                    self.forward_timedist_prn(input_datas.input_images, 
+                    self.forward_map_prn(input_datas.input_images, 
                                             input_datas.input_gt_boxes, 
                                             input_datas.prn_images)
         else:
@@ -273,7 +281,7 @@ class MetaFasterRcnn(FasterRcnn):
     
     @tf.function
     def forward_train(self, input_image, active_class_ids, input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, prn_images):
-        outputs:Outputs = self.forward_timedist_prn(input_image, 
+        outputs:Outputs = self.forward_map_prn(input_image, 
                                             input_gt_boxes,
                                             prn_images)
         attention_score = self.meta_cls_score(outputs.attentions_logits)
@@ -360,7 +368,7 @@ class MetaFasterRcnn(FasterRcnn):
 
 
     @tf.function
-    def forward_timedist_prn(self, input_image, input_gt_boxes, batch_prn_images):
+    def forward_map_prn(self, input_image, input_gt_boxes, batch_prn_images):
         prn_images = PrnBackground(self.config)([input_image, input_gt_boxes, batch_prn_images])
         batch_attentions_logits, batch_attentions = tf.vectorized_map(self.forward_prn,prn_images)
         attentions_logits = tf.reduce_mean(batch_attentions_logits, 0) # [NUM_CLASSES, FC_LAYERS_SIZE]
@@ -386,3 +394,26 @@ class MetaFasterRcnn(FasterRcnn):
         attentions = KL.Activation(tf.nn.sigmoid)(attentions_logits)
 
         return attentions_logits,attentions
+
+    def predict(self, x, batch_size=None, verbose="auto", steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, mode:Mode=Mode.PREDICT):
+        assert mode in [Mode.PREDICT, Mode.PRN]
+
+        if mode==Mode.PRN:
+            self.set_call_function(Mode.PRN)
+            cls_attentions_sum = np.zeros([self.config.NUM_CLASSES, self.config.FPN_CLASSIF_FC_LAYERS_SIZE])
+            cls_attentions_cnt = 0
+            pbar = tf.keras.utils.Progbar(steps)
+            for attentions_step,data in enumerate(x):
+                attentions = self.infer_attentions_function(data)
+                cls_attentions_sum += attentions.numpy()
+                cls_attentions_cnt += 1
+                pbar.update(attentions_step, finalize=False)
+                if attentions_step == steps:
+                    break
+            pbar.update(attentions_step, finalize=True)
+            attentions = cls_attentions_sum/cls_attentions_cnt
+            results = attentions
+        else:
+            super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
+            results = self.val_results
+        return results

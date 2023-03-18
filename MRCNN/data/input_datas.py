@@ -76,3 +76,55 @@ class InputDatas:
             'attentions': self.attentions,
             'input_gt_masks': self.input_gt_masks
         }
+    
+    def update_input_gt_boxes(self, new):
+        self.input_gt_boxes = new
+        return self
+
+    def update_dataloader_class_ids(self, new):
+        self.dataloader_class_ids = new
+        return self
+
+    def update_rpn_match(self, new):
+        self.rpn_match = new
+        return self
+
+    def update_rpn_bbox(self, new):
+        self.rpn_bbox = new
+        return self
+
+    def update_active_class_ids(self, new):
+        self.active_class_ids = new
+        return self
+
+    def update_prn_images(self, new):
+        self.prn_images = new
+        return self
+
+    def update_pathes(self, new):
+        self.pathes = new
+        return self
+
+    def update_input_images(self, new):
+        self.input_images = new
+        return self
+
+    def update_input_window(self, new):
+        self.input_window = new
+        return self
+
+    def update_origin_image_shapes(self, new):
+        self.origin_image_shapes = new
+        return self
+
+    def update_image_ids(self, new):
+        self.image_ids = new
+        return self
+
+    def update_attentions(self, new):
+        self.attentions = new
+        return self
+
+    def update_input_gt_masks(self, new):
+        self.input_gt_masks = new
+        return self

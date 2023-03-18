@@ -8,6 +8,7 @@ import pickle
 import tensorflow as tf
 
 from MRCNN.data import frcnn_data_loader
+from MRCNN import PydanticConfig
 from MRCNN.data.input_datas import InputDatas
 from MRCNN.enums import Mode
 from MRCNN.utils import (compute_backbone_shapes,
@@ -15,11 +16,11 @@ from MRCNN.utils import (compute_backbone_shapes,
 from pycocotools import mask as maskUtils
 
 
-@dataclass
+@dataclass(config=PydanticConfig)
 class DataLoader(frcnn_data_loader.DataLoader):
 
-    phase:int=1
-    attentions:Optional[str] = None
+    phase:int=2
+    attentions:Union[str,np.ndarray,tf.Tensor,None] = None
     prn_batch_size:Optional[int] = None
 
     def __hash__(self) -> int:
@@ -34,31 +35,42 @@ class DataLoader(frcnn_data_loader.DataLoader):
     def make_dataloader(self):
         if self.phase==1:
             self.dataset.set_dataloader_class_list(self.config.NOVEL_CLASSES)
+            self.config.set_phase(1)
         
         self.novel_classes = tuple(self.config.NOVEL_CLASSES)
-        if self.config.SHOTS > self.dataset.min_class_count:
-            ValueError('SHOTS must be less than min_class_count')
+        if self.mode!=Mode.PREDICT:
+            if self.config.SHOTS > self.dataset.min_class_count:
+                ValueError('SHOTS must be less than min_class_count')
         
-        super().make_dataloader()
 
-        with self.config.STRATEGY.scope():
-            self.data_loader = self.config.STRATEGY.experimental_distribute_dataset(self.data_loader)
+        if self.mode==Mode.PRN:
+            self.data_loader = self.make_train_dataloader()
+        else: 
+            super().make_dataloader()
+        
+        if self.mode in [Mode.PRN, Mode.TRAIN]:
+            with self.config.STRATEGY.scope():
+                self.data_loader = self.config.STRATEGY.experimental_distribute_dataset(self.data_loader)
+
+
             
 
     def make_predict_dataloader(self):
         data_loader = super().make_predict_dataloader()
 
-        with open(self.attentions, 'rb') as f:
-            attentions = pickle.load(f)
+        if isinstance(self.attentions,str):
+            with open(self.attentions, 'rb') as f:
+                attentions = pickle.load(f)
+        elif self.attentions is None:
+            ValueError('argument attentions is necessary.')
 
         attentions_dataset = tf.data.Dataset\
             .from_tensors(attentions)\
             .repeat()\
-            .batch(self.batch_size)
         
         data_loader = tf.data.Dataset\
             .zip((data_loader, attentions_dataset))\
-            .map(lambda datas, attentions: [InputDatas(attentions=attentions,**datas[0]).to_dict()],
+            .map(lambda datas, attentions: [InputDatas(self.config,**datas[0]).update_attentions(attentions).to_dict()],
                 num_parallel_calls=tf.data.AUTOTUNE)\
             .prefetch(tf.data.AUTOTUNE)
         return data_loader
@@ -68,17 +80,19 @@ class DataLoader(frcnn_data_loader.DataLoader):
         data_loader = super().make_test_dataloader()
 
         if self.attentions is not None:
-            with open(self.attentions, 'rb') as f:
-                attentions = pickle.load(f)
+            if isinstance(self.attentions,str):
+                with open(self.attentions, 'rb') as f:
+                    attentions = pickle.load(f)
+            else:
+                attentions = self.attentions
 
             attentions_dataset = tf.data.Dataset\
                 .from_tensors(attentions)\
                 .repeat()\
-                .batch(self.batch_size)
 
             data_loader = tf.data.Dataset\
                 .zip((data_loader, attentions_dataset))\
-                .map(lambda datas, attentions: [InputDatas(attentions=attentions,**datas[0]).to_dict()],
+                .map(lambda datas, attentions: [InputDatas(self.config,**datas[0]).update_attentions(attentions).to_dict()],
                     num_parallel_calls=tf.data.AUTOTUNE)\
                 .prefetch(tf.data.AUTOTUNE)
         
@@ -115,7 +129,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
         
         data_loader = tf.data.Dataset\
             .zip((data_loader, prn_dataset))\
-            .map(lambda datas, prn_images: [InputDatas(self.config, prn_images=prn_images, **datas[0]).to_dict()],
+            .map(lambda datas, prn_images: [InputDatas(self.config, **datas[0]).update_prn_images(prn_images).to_dict()],
                     num_parallel_calls=tf.data.AUTOTUNE)\
             .prefetch(tf.data.AUTOTUNE)
         

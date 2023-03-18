@@ -228,5 +228,11 @@ class Config:
 
         # Input image size
         self.IMAGE_SHAPE:np.ndarray = np.array([self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, self.IMAGE_CHANNEL_COUNT])
+        self.origin_NUM_CLASSES = self.NUM_CLASSES
 
-        self.NUM_CLASSES = self.NUM_CLASSES - len(self.NOVEL_CLASSES)
+    
+    def set_phase(self, phase):
+        if phase==1:
+            self.NUM_CLASSES = self.origin_NUM_CLASSES - len(self.NOVEL_CLASSES)
+        else:
+            self.NUM_CLASSES = self.origin_NUM_CLASSES

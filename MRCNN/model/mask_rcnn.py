@@ -35,13 +35,9 @@ class MaskRcnn(FasterRcnn):
 
     
     def predict_step(self, data):
-        input_datas:InputDatas = InputDatas(self.config, **data[0])
+        input_data:InputDatas = InputDatas(self.config, **data[0])
         outputs:Outputs = self(data[0])
-        return (outputs.detections, 
-                outputs.masks,
-                input_datas.origin_image_shapes, 
-                input_datas.input_window, 
-                input_datas.pathes)
+        tf.py_function(self.build_detection_results, (input_data.pathes, outputs.detections, input_data.origin_image_shapes, input_data.input_window), ())
 
 
     def test_step(self, data):
