@@ -23,6 +23,28 @@ class DataLoader(frcnn_data_loader.DataLoader):
     attentions:Union[str,np.ndarray,tf.Tensor,None] = None
     prn_batch_size:Optional[int] = None
 
+
+    def __post_init__(self):
+        if self.phase==1:
+            self.dataset.set_dataloader_class_list(self.config.NOVEL_CLASSES)
+            self.config.set_phase(1)
+        else:
+            self.config.set_phase(2)
+            if self.mode != Mode.PREDICT:
+                self.dataset.set_dataloader_class_list([])
+        
+        if self.mode!=Mode.PREDICT:
+            if self.config.SHOTS > self.dataset.min_class_count:
+                ValueError('SHOTS must be less than min_class_count')
+
+        self.novel_classes = tuple(self.config.NOVEL_CLASSES)
+        super().__post_init__()
+
+        if self.mode in [Mode.PRN, Mode.TRAIN]:
+            with self.config.STRATEGY.scope():
+                self.data_loader = self.config.STRATEGY.experimental_distribute_dataset(self.data_loader)
+            
+
     def __hash__(self) -> int:
         return hash((tuple(self.config.ACTIVE_CLASS_IDS) if self.config.ACTIVE_CLASS_IDS is not None else None, 
                      self.mode, 
@@ -33,27 +55,11 @@ class DataLoader(frcnn_data_loader.DataLoader):
     
 
     def make_dataloader(self):
-        if self.phase==1:
-            self.dataset.set_dataloader_class_list(self.config.NOVEL_CLASSES)
-            self.config.set_phase(1)
-        
-        self.novel_classes = tuple(self.config.NOVEL_CLASSES)
-        if self.mode!=Mode.PREDICT:
-            if self.config.SHOTS > self.dataset.min_class_count:
-                ValueError('SHOTS must be less than min_class_count')
-        
-
         if self.mode==Mode.PRN:
             self.data_loader = self.make_train_dataloader()
         else: 
             super().make_dataloader()
         
-        if self.mode in [Mode.PRN, Mode.TRAIN]:
-            with self.config.STRATEGY.scope():
-                self.data_loader = self.config.STRATEGY.experimental_distribute_dataset(self.data_loader)
-
-
-            
 
     def make_predict_dataloader(self):
         data_loader = super().make_predict_dataloader()
@@ -63,6 +69,8 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 attentions = pickle.load(f)
         elif self.attentions is None:
             ValueError('argument attentions is necessary.')
+        else:
+            attentions = self.attentions
 
         attentions_dataset = tf.data.Dataset\
             .from_tensors(attentions)\

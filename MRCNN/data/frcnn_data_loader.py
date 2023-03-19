@@ -91,11 +91,10 @@ class DataLoader:
         img_ids = tf.data.Dataset\
             .from_tensor_slices([img['id'] for img in coco.dataset['images']])
 
-
         data_loader = tf.data.Dataset\
             .zip((pathes,img_ids))\
             .shuffle(len(self.dataset))\
-            .map(self.preproccessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
+            .map(self.preprocessing_test, num_parallel_calls=tf.data.AUTOTUNE)\
             .batch(self.batch_size)\
             .map(lambda datas: 
                     [InputDatas(self.config, self.anchors.shape[0], **datas).to_dict()],
@@ -122,7 +121,7 @@ class DataLoader:
             .zip((path, ann_ids))\
             .repeat()\
             .shuffle(len(self.dataset))\
-            .map(lambda path, ann_ids: self.preproccessing_train(path, ann_ids), 
+            .map(lambda path, ann_ids: self.preprocessing_train(path, ann_ids), 
                     num_parallel_calls=tf.data.AUTOTUNE)\
 
         active_classes = [1]+[1 if cat in self.active_class_ids else 0 
@@ -172,8 +171,8 @@ class DataLoader:
                 'origin_image_shapes':origin_image_shape,
                 'pathes':path}
     
-    @tf.function
-    def preproccessing_test(self, path, img_id):
+    # @tf.function
+    def preprocessing_test(self, path, img_id):
         image = self.load_image(path)
         resized_image, window = self.resize_image(image, list(self.config.IMAGE_SHAPE[:2]))
         preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
@@ -184,7 +183,7 @@ class DataLoader:
                 'image_ids':img_id}
 
     @tf.function
-    def preproccessing_train(self, path, ann_ids):
+    def preprocessing_train(self, path, ann_ids):
         image = self.load_image(path)
         boxes, dataloader_class_ids =\
             tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.int64))
@@ -243,11 +242,12 @@ class DataLoader:
     @tf.function(input_signature=[tf.TensorSpec(shape=(None,), dtype=tf.int64)])
     def padding_ann_ids(self, ann_ids):
         def f(ann_ids):
-            shape = ann_ids[0].shape
-            padded_ann_ids = tf.zeros([self.config.MAX_GT_INSTANCES, *shape], dtype=tf.int64)
+            padded_ann_ids = tf.zeros([self.config.MAX_GT_INSTANCES], dtype=tf.int64)
             indices = tf.expand_dims(tf.range(tf.shape(ann_ids)[0]),1)
             ann_ids = tf.tensor_scatter_nd_update(padded_ann_ids, indices, tf.gather(ann_ids, tf.range(tf.shape(ann_ids)[0])))
             return ann_ids
+        
+        ann_ids = tf.cast(ann_ids, tf.int64)
 
         if tf.shape(ann_ids)[0]>self.config.MAX_GT_INSTANCES:
             ann_ids = tf.random.shuffle(ann_ids)[:self.config.MAX_GT_INSTANCES]

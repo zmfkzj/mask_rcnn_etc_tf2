@@ -41,6 +41,7 @@ class Dataset:
             anns = self.coco.getAnnIds(catIds=dataset_class_id)
             self.class_count[dataset_class_id] = len(anns)
         self.min_class_count:int = min(self.class_count.values())
+        self.max_class_count:int = max(self.class_count.values())
     
 
     def set_dataloader_class_list(self, novel_class_ids):

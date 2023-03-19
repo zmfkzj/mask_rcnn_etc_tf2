@@ -28,7 +28,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
         return boxes, masks, dataloader_class_ids
 
     @tf.function
-    def preproccessing_train(self, path, ann_ids):
+    def preprocessing_train(self, path, ann_ids):
         image = self.load_image(path)
         boxes, masks, dataloader_class_ids =\
             tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))

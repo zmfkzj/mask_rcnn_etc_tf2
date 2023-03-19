@@ -136,7 +136,7 @@ class MetaFasterRcnn(FasterRcnn):
                 self.reset_metrics()
                 self.set_call_function(Mode.TRAIN)
                 callbacks.on_epoch_begin(epoch)
-                pbar = keras.utils.Progbar(target=self.config.STEPS_PER_EPOCH)
+                pbar = keras.utils.Progbar(target=steps_per_epoch)
                 for train_step,data in enumerate(x):
                     callbacks.on_train_batch_begin(train_step)
                     train_logs = train_function(data)
@@ -167,7 +167,8 @@ class MetaFasterRcnn(FasterRcnn):
                     attentions = self.infer_attentions_function(data)
                     cls_attentions_sum += attentions.numpy()
                     cls_attentions_cnt += 1
-                    if attentions_step == (self.dataset.min_class_count//self.config.PRN_BATCH_SIZE + 1):
+                    min_class_count = min([count for cat, count in self.dataset.class_count.items() if cat not in self.config.NOVEL_CLASSES])
+                    if attentions_step == (min_class_count//self.config.PRN_BATCH_SIZE + int(bool(min_class_count%self.config.PRN_BATCH_SIZE))):
                         break
                 attentions = cls_attentions_sum/cls_attentions_cnt
 
@@ -179,8 +180,7 @@ class MetaFasterRcnn(FasterRcnn):
                     self.val_results.clear()
                     for test_step,data in enumerate(validation_data):
                         callbacks.on_test_batch_begin(test_step)
-                        input_datas:InputDatas = data[0]
-                        input_datas = input_datas.update_attentions(tf.cast(attentions, tf.float32))
+                        input_datas = InputDatas(self.config, **data[0]).update_attentions(tf.cast(attentions, tf.float32)).to_dict()
 
                         self.custom_test_function([input_datas])
 
