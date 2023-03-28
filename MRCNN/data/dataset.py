@@ -38,14 +38,14 @@ class Dataset:
     def __len__(self) -> int:
         return len(self.coco.dataset['images'])
 
-    def count_each_class_objects(self):
+    def count_each_class_objects(self, novel_class_ids: list[int] = []):
         """Count the number of objects for each class in the dataset."""
         self.class_count = {}
         for dataset_class_id in self.coco.cats:
             anns = self.coco.getAnnIds(catIds=dataset_class_id)
             self.class_count[dataset_class_id] = len(anns)
-        self.min_class_count = min(self.class_count.values())
-        self.max_class_count = max(self.class_count.values())
+        self.min_class_count = min([v for k,v in self.class_count.items() if k not in novel_class_ids])
+        self.max_class_count = max([v for k,v in self.class_count.items() if k not in novel_class_ids])
 
     def set_dataloader_class_list(self, novel_class_ids: list[int]):
         """Set the dataloader class list excluding the specified novel class IDs."""

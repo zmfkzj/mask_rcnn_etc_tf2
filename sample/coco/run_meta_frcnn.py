@@ -84,7 +84,7 @@ callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1_fpn_p_best
             keras.callbacks.EarlyStopping('val_mAP50',patience=30,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
-        epochs=1,
+        epochs=30000,
         callbacks=callbacks,
         validation_data=iter(val_loader), 
         steps_per_epoch=config.STEPS_PER_EPOCH,

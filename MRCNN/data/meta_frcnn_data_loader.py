@@ -27,11 +27,13 @@ class DataLoader(frcnn_data_loader.DataLoader):
     def __post_init__(self):
         if self.phase==1:
             self.dataset.set_dataloader_class_list(self.config.NOVEL_CLASSES)
+            self.dataset.count_each_class_objects(self.config.NOVEL_CLASSES)
             self.config.set_phase(1)
         else:
             self.config.set_phase(2)
             if self.mode != Mode.PREDICT:
                 self.dataset.set_dataloader_class_list([])
+                self.dataset.count_each_class_objects([])
         
         if self.mode!=Mode.PREDICT:
             if self.config.SHOTS > self.dataset.min_class_count:

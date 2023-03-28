@@ -12,7 +12,6 @@ from MRCNN.enums import EvalType, Mode
 from MRCNN.layer.prn_background import PrnBackground
 from MRCNN.loss import (MetaClassLoss, MrcnnBboxLossGraph, MrcnnClassLossGraph,
                         RpnBboxLossGraph, RpnClassLossGraph)
-from MRCNN.model.base_model import BaseModel
 from MRCNN.model.faster_rcnn import FasterRcnn
 from MRCNN.model.outputs import Outputs, OutputsArgs
 
