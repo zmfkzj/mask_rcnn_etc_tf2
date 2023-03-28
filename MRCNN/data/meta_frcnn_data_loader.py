@@ -122,7 +122,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
                     .from_tensor_slices(ann_ids)\
                     .map(self.preprocessing_prn,num_parallel_calls=tf.data.AUTOTUNE)\
                     .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))\
-                    .take(self.config.SHOTS)\
+                    .take(shots)\
                     .repeat()
 
                 prn_datasets.append(dataset)

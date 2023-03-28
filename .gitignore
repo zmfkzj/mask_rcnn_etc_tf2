@@ -1,6 +1,7 @@
 logs*
 save_model*
 mask_rcnn_coco.h5
+*.h5
 nohup.out
 save_*
 
