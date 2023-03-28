@@ -69,7 +69,7 @@ class Config:
     TOP_DOWN_PYRAMID_SIZE:int = 256
 
     # Number of classification classes (including background)
-    NUM_CLASSES:int = 81  # Override in sub-classes
+    ORIGIN_NUM_CLASSES:int = 81  # Override in sub-classes
 
     # Length of square anchor side in pixels
     RPN_ANCHOR_SCALES:list[int] = field(default_factory=lambda:[32, 64, 128, 256, 512])
@@ -228,11 +228,11 @@ class Config:
 
         # Input image size
         self.IMAGE_SHAPE:np.ndarray = np.array([self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, self.IMAGE_CHANNEL_COUNT])
-        self.origin_NUM_CLASSES = self.NUM_CLASSES
+        self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES
 
     
     def set_phase(self, phase):
         if phase==1:
-            self.NUM_CLASSES = self.origin_NUM_CLASSES - len(self.NOVEL_CLASSES)
+            self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES - len(self.NOVEL_CLASSES)
         else:
-            self.NUM_CLASSES = self.origin_NUM_CLASSES
+            self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES

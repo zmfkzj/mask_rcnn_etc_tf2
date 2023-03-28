@@ -116,17 +116,14 @@ class DataLoader(frcnn_data_loader.DataLoader):
             if self.phase==1 and dataset_class_id in self.novel_classes:
                 continue
             else:
+                shots = self.dataset.min_class_count if self.config.SHOTS==0 else self.config.SHOTS 
                 ann_ids = self.dataset.coco.getAnnIds(catIds=dataset_class_id, iscrowd=False)
                 dataset = tf.data.Dataset\
                     .from_tensor_slices(ann_ids)\
-                    .shuffle(len(ann_ids))\
                     .map(self.preprocessing_prn,num_parallel_calls=tf.data.AUTOTUNE)\
-                    .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))
-
-                if self.config.SHOTS==0:
-                    dataset = dataset.repeat()
-                else:
-                    dataset = dataset.take(self.config.SHOTS).repeat()
+                    .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))\
+                    .take(self.config.SHOTS)\
+                    .repeat()
 
                 prn_datasets.append(dataset)
         
