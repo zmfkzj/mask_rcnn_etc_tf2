@@ -123,7 +123,6 @@ class DataLoader(frcnn_data_loader.DataLoader):
                 dataset = tf.data.Dataset\
                     .from_tensor_slices(ann_ids)\
                     .map(self.preprocessing_prn,num_parallel_calls=tf.data.AUTOTUNE)\
-                    .filter(lambda prn_img: not tf.reduce_all(tf.math.is_nan(prn_img)))\
                     .take(shots)\
                     .repeat()
 
@@ -158,13 +157,11 @@ class DataLoader(frcnn_data_loader.DataLoader):
         preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
 
         mask = tf.py_function(lambda bbox, h, w:self.bbox_to_mask(bbox, h, w),(resized_bbox,*self.config.PRN_IMAGE_SIZE),tf.bool)
-        if tf.size(tf.where(mask==True))==0:
-            return np.nan
         mask = tf.expand_dims(mask, -1)
         mask = tf.cast(mask, tf.float32)
         prn_image = tf.concat([preprocessed_image, mask], -1)
         return prn_image
-
+    
 
     @tf.function
     def resize_prn(self, image, bbox):
