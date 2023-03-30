@@ -15,12 +15,12 @@ from MRCNN.utils import LossWeight
 
 
 config = Config(GPUS=[0,1],
-                NUM_CLASSES=80+1,
+                ORIGIN_NUM_CLASSES=80+1,
                 LEARNING_RATE=0.0001,
                 TRAIN_IMAGES_PER_GPU=4,
                 TEST_IMAGES_PER_GPU=10,
-                STEPS_PER_EPOCH=2,
-                VALIDATION_STEPS=5,
+                STEPS_PER_EPOCH=2000,
+                VALIDATION_STEPS=1000,
                 )
 
 class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
@@ -63,14 +63,14 @@ with config.STRATEGY.scope():
 train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations, batch_size=12)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE, 30*config.STEPS_PER_EPOCH,0.5,1, staircase=True)
 with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fpn_p'),
-            keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
+            keras.callbacks.EarlyStopping('val_mAP50',patience=30,verbose=1, mode='max',restore_best_weights=True)]
 
 model.fit(iter(train_loader), 
         epochs=1,
@@ -86,12 +86,12 @@ model.fit(iter(train_loader),
 train_loader = DataLoader(config, Mode.TRAIN, dataset=train_dataset,augmentations=augmentations)
 val_loader = DataLoader(config, Mode.TEST, dataset=val_dataset)
 
-lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 100*config.STEPS_PER_EPOCH,0.1,1, staircase=True)
+lr_schedule = CustomScheduler(config.LEARNING_RATE/10, 30*config.STEPS_PER_EPOCH,0.5,1, staircase=True)
 with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.ALL)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/all/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/all/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/all'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 

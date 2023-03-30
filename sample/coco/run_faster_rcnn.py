@@ -15,12 +15,12 @@ from MRCNN.utils import LossWeight
 
 
 config = Config(GPUS=0,
-                NUM_CLASSES=80+1,
+                ORIGIN_NUM_CLASSES=80+1,
                 LEARNING_RATE=0.0001,
                 TRAIN_IMAGES_PER_GPU=5,
                 TEST_IMAGES_PER_GPU=10,
-                STEPS_PER_EPOCH=2,
-                VALIDATION_STEPS=5,
+                STEPS_PER_EPOCH=2000,
+                VALIDATION_STEPS=100,
                 )
 
 class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
@@ -68,7 +68,7 @@ with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fpn_p'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
@@ -91,7 +91,7 @@ with config.STRATEGY.scope():
     optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.ALL)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/all/best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/all/best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/all'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 

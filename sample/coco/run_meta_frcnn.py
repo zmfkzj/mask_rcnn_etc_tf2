@@ -79,7 +79,7 @@ with config.STRATEGY.scope():
     model.load_weights('pretrain_weight.h5', by_name=True, skip_mismatch=True)
     model.compile(val_dataset, train_loader.active_class_ids,optimizer=optimizer, train_layers=TrainLayers.FPN_P)
 
-callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1_fpn_p_best',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/phase1_fpn_p_best.h5',monitor='val_mAP50',save_best_only=True, save_weights_only=True,mode='max'),
             keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/phase1_fpn_p'),
             keras.callbacks.EarlyStopping('val_mAP50',patience=30,verbose=1, mode='max',restore_best_weights=True)]
 

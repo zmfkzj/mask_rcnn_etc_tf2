@@ -1,5 +1,6 @@
+from multiprocessing import Manager, Process
 import re
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Optional
 
 import keras.api._v2.keras as keras
@@ -107,7 +108,7 @@ class BaseModel(KM.Model):
         super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
 
         mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
-            tf.py_function(self.get_coco_metrics, (), 
+            tf.py_function(self.get_custom_metrics, (), 
                         (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
         
         return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
@@ -252,22 +253,45 @@ class BaseModel(KM.Model):
                 self.val_results.append(result)
         
 
-    def get_coco_metrics(self):
+    def get_coco_eval(self):
         coco = deepcopy(self.dataset.coco)
+        val_results = copy(self.val_results)
+        self.val_results.clear()
+
+        with Manager() as mng:
+            return_value = mng.list()
+            p = Process(target=self.__get_coco_eval, args=(coco, val_results, self.eval_type, self.param_image_ids, self.active_class_ids, return_value))
+            p.start()
+            p.join()
+            r = list(return_value)
+        return r
+    
+
+    @staticmethod
+    def __get_coco_eval(coco,val_results, eval_type, param_image_ids, active_class_ids, return_value):
+        coco_results = coco.loadRes(val_results)
+
+        coco_eval = COCOeval(coco, coco_results, eval_type.value)
+        coco_eval.params.imgIds = list(param_image_ids)
+        coco_eval.params.catIds = list(active_class_ids)
+        coco_eval.evaluate()
+        coco_eval.accumulate()
+        coco_eval.summarize()
+        mAP = coco_eval.stats[0]
+        mAP50 = coco_eval.stats[1]
+        mAP75 = coco_eval.stats[2]
+
+
+        return_value.append(mAP)
+        return_value.append(mAP50)
+        return_value.append(mAP75)
+        return_value.append(coco_eval.evalImgs)
+        
+
+    def get_custom_metrics(self):
         val_results = self.val_results
         if val_results:
-            coco_results = coco.loadRes(val_results)
-
-            coco_eval = COCOeval(coco, coco_results, self.eval_type.value)
-            coco_eval.params.imgIds = list(self.param_image_ids)
-            coco_eval.params.catIds = list(self.active_class_ids)
-            coco_eval.evaluate()
-            coco_eval.accumulate()
-            coco_eval.summarize()
-            mAP = coco_eval.stats[0]
-            mAP50 = coco_eval.stats[1]
-            mAP75 = coco_eval.stats[2]
-
+            mAP, mAP50, mAP75, evalImgs = self.get_coco_eval()
             results = [mAP, mAP50, mAP75]
 
 
@@ -275,7 +299,7 @@ class BaseModel(KM.Model):
             pred = []
             sample_weight = []
             iou_idx = {iou:idx for iou,idx in zip(np.arange(0.5,1,0.05), range(10))}[float(self.iou_thresh)]
-            for img in coco_eval.evalImgs:
+            for img in evalImgs:
                 if img is not None and img['aRng']==[0, 10000000000.0]:
                     gtIds:list = img['gtIds']
                     dtScores = img['dtScores']

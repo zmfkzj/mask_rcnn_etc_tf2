@@ -188,7 +188,7 @@ class MetaFasterRcnn(FasterRcnn):
                         if test_step==validation_steps:
                             break
 
-                    mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = self.get_coco_metrics()
+                    mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = self.get_custom_metrics()
                     test_logs = {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
                     test_logs = tf_utils.sync_to_numpy_or_python_type(test_logs)
                     # Override with model metrics instead of last step logs
