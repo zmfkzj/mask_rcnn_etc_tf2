@@ -1,17 +1,15 @@
-from dataclasses import field
+from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Union
 import numpy as np
 import tensorflow as tf
 import keras.api._v2.keras as keras
-from pydantic.dataclasses import dataclass
-from pydantic import Field
 
 
 # Base Configuration Class
 # Don't use this class directly. Instead, sub-class it and override
 # the configurations you need to change.
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Config:
     """Base configuration class. For custom configurations, create a
     sub-class that inherits from this one and override properties

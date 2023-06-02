@@ -26,14 +26,11 @@ except Exception:
     install_reqs = []
 
 setup(
-    name='meta-rcnn',
     version='0.1',
-    url='https://github.com/zmfkzj/meta-rcnn-tf2.7',
     author='zmfkzj',
     author_email='qlwlal@naver.com',
-    description='Meta R-CNN for object detection for TF2.7',
+    description='Meta R-CNN for object detection for TF2',
     packages=["MRCNN"],
     install_requires=install_reqs,
     include_package_data=True,
-    python_requires='>=3.6,<3.10'
 )

@@ -7,7 +7,7 @@ import os
 
 from MRCNN.config import Config
 from MRCNN.data.mrcnn_data_loader import DataLoader
-from MRCNN.data.dataset import Dataset
+from MRCNN.data.dataset_old import Dataset
 from MRCNN.model import MaskRcnn
 from MRCNN.enums import TrainLayers, Mode
 from MRCNN.utils import LossWeight

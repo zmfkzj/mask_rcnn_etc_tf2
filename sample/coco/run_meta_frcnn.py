@@ -13,7 +13,7 @@ for gpu in gpus:
 
 from MRCNN.config import Config
 from MRCNN.data.meta_frcnn_data_loader import DataLoader
-from MRCNN.data.dataset import Dataset
+from MRCNN.data.dataset_old import Dataset
 from MRCNN.enums import EvalType, TrainLayers, Mode
 from MRCNN.model import MetaFasterRcnn
 from MRCNN.utils import LossWeight

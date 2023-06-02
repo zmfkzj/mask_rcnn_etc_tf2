@@ -1,5 +1,5 @@
 from copy import deepcopy
-from pydantic.dataclasses import dataclass
+from dataclasses import dataclass
 import math
 
 import numpy as np

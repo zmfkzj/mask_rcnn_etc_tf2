@@ -12,7 +12,7 @@ from imgaug.augmenters import Sequential
 from MRCNN.config import Config
 from MRCNN.data.input_datas import InputDatas
 from MRCNN.enums import Mode
-from MRCNN.data.dataset import Dataset
+from MRCNN.data.dataset_old import Dataset
 from MRCNN.utils import (compute_backbone_shapes,
                          generate_pyramid_anchors)
 

@@ -7,7 +7,7 @@ import os
 
 from MRCNN.config import Config
 from MRCNN.data.frcnn_data_loader import DataLoader
-from MRCNN.data.dataset import Dataset
+from MRCNN.data.dataset_old import Dataset
 from MRCNN.model import FasterRcnn
 from MRCNN.enums import TrainLayers, Mode
 from MRCNN.utils import LossWeight
