@@ -91,7 +91,7 @@ class MrcnnClassLossGraph(KL.Layer):
     #     self.focal_loss = tf.losses.BinaryFocalCrossentropy(apply_class_balancing=True, from_logits=True, reduction=tf.losses.Reduction.NONE)
 
 
-    def call(self, target_class_ids, pred_class_logits, active_class_ids):
+    def call(self, target_class_ids, pred_class_logits):
         """Loss for the classifier head of Mask RCNN.
 
         target_class_ids: [batch, num_rois]. Integer class IDs. Uses zero
@@ -106,25 +106,13 @@ class MrcnnClassLossGraph(KL.Layer):
         # to int to get around it.
         target_class_ids = tf.cast(target_class_ids, 'int64')
 
-        # Find predictions of classes that are not in the dataset.
-        pred_class_ids = tf.argmax(pred_class_logits, axis=2)
-        # TODO: Update this line to work with batch > 1. Right now it assumes all
-        #       images in a batch have the same active_class_ids
-        pred_active = tf.gather(active_class_ids, pred_class_ids,batch_dims=1)
-
         # Loss
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=target_class_ids, logits=pred_class_logits)
 
-        # Erase losses of predictions of classes that are not in the active
-        # classes of the image.
-        pred_active = tf.cast(pred_active, tf.float32)
-        loss = loss * pred_active
-
         # Computer loss mean. Use only predictions that contribute
         # to the loss to get a correct mean.
-        loss = tf.reduce_sum(loss) / tf.reduce_sum(pred_active)
-
+        loss = tf.reduce_mean(loss)
         return loss
 
 

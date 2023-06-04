@@ -29,7 +29,7 @@ class BaseModel(KM.Model):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config, eval_type:EvalType, name):
+    def __init__(self, config:Config, name):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -37,8 +37,6 @@ class BaseModel(KM.Model):
         """
         super().__init__(name=name)
         self.config = config
-        self.strategy = self.config.STRATEGY
-        self.eval_type = eval_type
 
         self.anchors = self.get_anchors(config.IMAGE_SHAPE)
 
@@ -48,71 +46,9 @@ class BaseModel(KM.Model):
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
         # for evaluation
-        with no_automatic_dependency_tracking_scope(self):
-            self.val_results = []
-        self.param_image_ids = set()
     
         self.backbone = self.make_backbone_model(config)
     
-    
-    def compile(self, dataset:Dataset, 
-                active_class_ids:Optional[list[int]], 
-                iou_thresh: float = 0.5, 
-                optimizer="rmsprop", 
-                train_layers=TrainLayers.ALL,
-                loss_weights:LossWeight=LossWeight(), 
-                loss=None, 
-                metrics=None, 
-                weighted_metrics=None, 
-                run_eagerly=None, 
-                steps_per_execution=None, 
-                jit_compile=None, 
-                **kwargs):
-        self.dataset = dataset
-        self.active_class_ids = active_class_ids
-        self.iou_thresh = iou_thresh
-        self.loss_weights = loss_weights
-        dummy_data = InputDatas(self.config, self.anchors.shape[0]).to_dict()
-        self.set_call_function(Mode.TRAIN)
-        self(dummy_data)
-        self.set_trainable(train_layers)
-        return super().compile(optimizer, loss, metrics, loss_weights, weighted_metrics, run_eagerly, steps_per_execution, jit_compile, **kwargs)
-    
-
-    def set_call_function(self, mode:Mode):
-        self.call_function = None
-
-    
-    def call(self, inputs) -> Outputs:
-        input_datas:InputDatas = InputDatas(self.config, **inputs)
-        return self.call_function(input_datas)
-
-    def fit(self, x=None, y=None, batch_size=None, epochs=1, verbose="auto", callbacks=None, validation_split=0, validation_data=None, shuffle=True, class_weight=None, sample_weight=None, initial_epoch=0, steps_per_epoch=None, validation_steps=None, validation_batch_size=None, validation_freq=1, max_queue_size=10, workers=1, use_multiprocessing=False):
-        self.set_call_function(Mode.TRAIN)
-        return super().fit(x, y, batch_size, epochs, verbose, callbacks, validation_split, validation_data, shuffle, class_weight, sample_weight, initial_epoch, steps_per_epoch, validation_steps, validation_batch_size, validation_freq, max_queue_size, workers, use_multiprocessing)
-    
-    def predict(self, x, batch_size=None, verbose="auto", steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False):
-        self.set_call_function(Mode.PREDICT)
-
-        self.param_image_ids.clear()
-        self.val_results.clear()
-
-        super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
-        return self.val_results
-
-    def evaluate(self, x=None, y=None, batch_size=None, verbose="auto", sample_weight=None, steps=None, callbacks=None, max_queue_size=10, workers=1, use_multiprocessing=False, return_dict=False, **kwargs):
-        self.param_image_ids.clear()
-        self.val_results.clear()
-
-        self.set_call_function(Mode.TEST)
-        super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
-
-        mAP, mAP50, mAP75, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
-            tf.py_function(self.get_custom_metrics, (), 
-                        (tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32,tf.float32))
-        
-        return {'mAP':mAP,'mAP50':mAP50,'mAP75':mAP75,'F1_0.1':F1_01,'F1_0.2':F1_02,'F1_0.3':F1_03,'F1_0.4':F1_04,'F1_0.5':F1_05,'F1_0.6':F1_06,'F1_0.7':F1_07,'F1_0.8':F1_08,'F1_0.9':F1_09}
-
     
     def make_backbone_model(self, config: Config):
         backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=list(config.IMAGE_SHAPE), dtype=tf.float32),
@@ -192,50 +128,3 @@ class BaseModel(KM.Model):
             self.config.RPN_ANCHOR_STRIDE)
         norm_anchor = utils.norm_boxes(anchors, image_shape[:2])
         return norm_anchor
-    
-
-    def build_detection_results(self, pathes, detections, origin_image_shapes, window, mrcnn_mask=None):
-        """
-        Args:
-            image_ids (Tensor): Tensor(shape=[batch_size]).
-            detections (Tensor): Tensor(shape=[batch_size, detection_max_instances, 6]). 6 is (y1, x1, y2, x2, class_id, class_score).
-            origin_image_shapes (Tensor): Tensor(shape=[batch_size, 2]). 2 is (height, width).
-            window (Tensor): Tensor(shape=[batch_size, 4]). 4 is (y1, x1, y2, x2).
-            mrcnn_mask (Tensor, optional): Tensor(shape=[batch_size, detection_max_instances, MASK_SHAPE[0], MASK_SHAPE[1], NUM_CLASSES]).
-        """
-        pathes = pathes.numpy()
-        detections = detections.numpy()
-        origin_image_shapes = origin_image_shapes.numpy()
-        window = window.numpy()
-        if mrcnn_mask is not None:
-            mrcnn_mask = mrcnn_mask.numpy()
-
-        for b in range(pathes.shape[0]):
-            if pathes[b]==0:
-                continue
-
-            final_rois, final_class_ids, final_scores, final_masks =\
-                unmold_detections(detections[b], 
-                                    origin_image_shapes[b], 
-                                    self.config.IMAGE_SHAPE, 
-                                    window[b],
-                                    mrcnn_mask=mrcnn_mask[b] if mrcnn_mask is not None else None)
-
-            # Loop through detections
-            for j in range(final_rois.shape[0]):
-                class_id = final_class_ids[j]
-                score = final_scores[j]
-                bbox = final_rois[j]
-                mask = final_masks[:, :, j] if final_masks is not None else None
-
-
-                result = {
-                    "path": pathes[b],
-                    "category_id": class_id,
-                    "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
-                    "score": score,
-                    'segmentation': maskUtils.encode(np.asfortranarray(mask)) 
-                                    if mrcnn_mask is not None else []
-                    }
-
-                self.val_results.append(result)

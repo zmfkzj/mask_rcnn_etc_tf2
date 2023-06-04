@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Union
 import numpy as np
 import tensorflow as tf

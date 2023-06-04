@@ -31,50 +31,59 @@ class _Category(msgspec.Struct):
 
 
 class _COCO(msgspec.Struct):
-    images: list[ _Image ]|dict[int,_Image]
-    annotations:list[ _Annotation ]|dict[int,_Annotation]
-    categories:list[ _Category ]|dict[int,_Category]
+    images: list[ _Image ]
+    annotations:list[ _Annotation ]
+    categories:list[ _Category ]
 
 
 @dataclass
 class Dataset:
-    json_path:InitVar[ str ]
-    image_dir:InitVar[ str ]
-    include_classes:InitVar[list[int]|None]=None
-    exclude_classes:InitVar[list[int]|None]=None
+    coco:InitVar[ _COCO ]
 
+    def __post_init__(self, coco: _COCO):
+        self.__coco = coco
+        self.__cat_name_id_dict:dict[str,int] = {}
+        self.__id_cat_name_dict:dict[int,str] = {}
 
-    def __post_init__(self, json_path:str, image_dir:str, include_classes:list[int]|None, exclude_classes:list[int]|None):
+        for i,cat in enumerate( self.categories ):
+            self.__cat_name_id_dict[cat.name] = i
+            self.__id_cat_name_dict[i] = cat.name
+
+    @staticmethod
+    def from_json(json_path:str, image_dir:str, include_classes:list[int]|None=None, exclude_classes:list[int]|None=None):
         if ( bool( include_classes ) & bool( exclude_classes ) ):
             raise ValueError(f'You must enter either \"include_classes\" or \"exclude_classes\"')
         
         with open(json_path, 'r') as f:
-            self.__coco = msgspec.json.decode(f.read(), type=_COCO)
+            coco = msgspec.json.decode(f.read(), type=_COCO)
         
-        include_classes = self.__get_include_classes(include_classes)
-        exclude_classes = self.__get_exclude_classes(exclude_classes)
+        include_classes = Dataset.__get_include_classes(coco, include_classes)
+        exclude_classes = Dataset.__get_exclude_classes(coco, exclude_classes)
         
-        new_img = {}
-        for img in self.__coco.images:
+        img_dict:dict[int,_Image] = {}
+        for img in coco.images:
             img_id = img.id
             del img.id
-            new_img[img_id] = img
+            img_dict[img_id] = img
             img.path = (Path(image_dir) / img.file_name).as_posix()
-        self.__coco.images = new_img
 
-        new_cat = {}
-        for cat in self.__coco.categories:
-            if ( cat.id in include_classes ) & (cat.id not in exclude_classes):
+        cat_dict:dict[int,_Category] = {}
+        deleted_cat_id = []
+        for cat in coco.categories:
+            if ( cat.name in include_classes ) & (cat.name not in exclude_classes):
                 cat_id = cat.id
                 del cat.id
-                new_cat[cat_id] = cat
-        self.__coco.categories = new_cat
+                cat_dict[cat_id] = cat
+            else:
+                deleted_cat_id.append(cat.id)
+        coco.categories = list( cat_dict.values() )
+        
 
-        new_ann = {}
-        for ann in self.__coco.annotations:
+        ann_dict:dict[int,_Annotation] = {}
+        for ann in coco.annotations:
             try:
-                img = self.__coco.images[ann.image_id]
-                cat = self.__coco.categories[ann.category_id]
+                img = img_dict[ann.image_id]
+                cat = cat_dict[ann.category_id]
                 ann.image = img
                 ann.category = cat
 
@@ -84,16 +93,27 @@ class Dataset:
                 cat.images.append(img)
 
                 ann_id = ann.id
-                del ann.id
-                new_ann[ann_id] = ann
+                del ann.id, ann.category_id, ann.image_id
+                ann_dict[ann_id] = ann
             except KeyError:
+                if ann.category_id in deleted_cat_id:
+                    continue
                 print(f'There was a problem loading annotation_id:{ann.id}. image_id:{ann.image_id} or category_id:{ann.category_id} does not exist. Proceed without loading.')
+        
+        return Dataset(coco)
 
-        self.__coco.annotations = new_ann
+
+    def __add__(self, one:'Dataset'):
+        images = self.__coco.images + one.images
+        categories = self.__coco.categories + one.categories
+        annotations = self.__coco.annotations + one.annotations
+        coco = _COCO(images=images, categories=categories,annotations=annotations)
+        return Dataset(coco)
     
 
-    def __get_include_classes(self, include_classes:list[int]|None) -> list[int]:
-        json_classes = { cat.id for cat in self.__coco.categories }
+    @staticmethod
+    def __get_include_classes(coco: _COCO, include_classes:list[str]|None) -> list[str]:
+        json_classes = { cat.name for cat in coco.categories }
         if include_classes is None:
             return list(json_classes)
 
@@ -104,15 +124,23 @@ class Dataset:
         return list(include_classes)
 
 
-    def __get_exclude_classes(self, exclude_classes:list[int]|None) -> list[int]:
+    @staticmethod
+    def __get_exclude_classes(coco:_COCO, exclude_classes:list[str]|None) -> list[str]:
         if exclude_classes is None:
             return []
 
-        json_classes = { cat.id for cat in self.__coco.categories }
+        json_classes = { cat.name for cat in coco.categories }
         exclude_classes = set(exclude_classes)
         if remain:=(exclude_classes - json_classes):
             raise ValueError(f'exclude classes, {remain}, are not found in dataset')
         return exclude_classes
+    
+
+    def get_loader_class_id(self, cat_name:str):
+        return self.__cat_name_id_dict[cat_name]
+
+    def get_cat_name(self, loader_class_id:int):
+        return self.__id_cat_name_dict[loader_class_id]
     
 
     @property

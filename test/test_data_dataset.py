@@ -17,25 +17,36 @@ class Test(unittest.TestCase):
     
 
     def test_load_dataset_1(self):
-        dataset = Dataset(self.json_path,'./source/images')
+        dataset = Dataset.from_json(self.json_path,'./source/images')
 
         self.assertIsNotNone(dataset.annotations)
         self.assertIsNotNone(dataset.images)
         self.assertIsNotNone(dataset.categories)
-        self.assertEqual(type(dataset.annotations),dict)
-        self.assertEqual(type(dataset.images),dict)
-        self.assertEqual(type(dataset.categories),dict)
-        self.assertRaises(AttributeError, lambda: dataset.annotations.popitem()[1].id)
-        self.assertRaises(AttributeError, lambda: dataset.images.popitem()[1].id)
-        self.assertRaises(AttributeError, lambda: dataset.categories.popitem()[1].id)
+        self.assertRaises(AttributeError, lambda: dataset.images.pop().id)
+        self.assertRaises(AttributeError, lambda: dataset.categories.pop().id)
+        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().id)
+        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().category_id)
+        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().image_id)
 
     def test_load_dataset_2(self):
-        self.assertRaises(ValueError, lambda : Dataset(self.json_path,'./source/images', include_classes=[1,2,3], exclude_classes=[4,5]))
+        self.assertRaises(ValueError, lambda : Dataset.from_json(self.json_path,'./source/images', include_classes=[1,2,3], exclude_classes=[4,5]))
 
     def test_load_dataset_3(self):
-        dataset = Dataset(self.json_path,'./source/images', include_classes=[1,2,3])
-        self.assertEqual({1,2,3},{id for id in dataset.categories})
+        include_classes = ["crack", "leakage", "peeling"]
+        dataset = Dataset.from_json(self.json_path,'./source/images', include_classes=include_classes)
+        self.assertEqual(set(include_classes),{cat.name for cat in dataset.categories})
 
     def test_load_dataset_4(self):
-        dataset = Dataset(self.json_path,'./source/images', exclude_classes=[1,2,3])
-        self.assertFalse({1,2,3}.intersection({id for id in dataset.categories}))
+        exclude_classes = ["crack", "leakage", "peeling"]
+        dataset = Dataset.from_json(self.json_path,'./source/images', exclude_classes=exclude_classes)
+        self.assertFalse(set(exclude_classes).intersection({cat.name for cat in dataset.categories}))
+    
+    def test_add_dataset(self):
+        dataset1 = Dataset.from_json(self.json_path,'./source/images')
+        dataset2 = Dataset.from_json('test/source/test.json','./source/images')
+
+        dataset3 = dataset1 + dataset2
+        self.assertEqual(len(dataset3.annotations), len(dataset1.annotations)+len(dataset2.annotations))
+        self.assertEqual(len(dataset3.images), len(dataset1.images)+len(dataset2.images))
+        self.assertEqual(len(dataset3.categories), len(dataset1.categories)+len(dataset2.categories))
+

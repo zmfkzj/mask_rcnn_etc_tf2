@@ -1,5 +1,6 @@
 import tensorflow_addons as tfa
 import tensorflow as tf
+import tensorflow_models as tfm
 
 
 class F1Score(tfa.metrics.F1Score):
