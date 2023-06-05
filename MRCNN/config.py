@@ -15,12 +15,6 @@ class Config:
     sub-class that inherits from this one and override properties
     that need to be changed.
     """
-    PRN_IMAGE_SIZE:tuple[int,int] = (224,224)
-    NOVEL_CLASSES:list[int] = field(default_factory=lambda:[])
-    SHOTS:int = 3
-
-    ACTIVE_CLASS_IDS:Optional[list[int]] = None
-
     # NUMBER OFF GPUs to use. When using only a CPU, this needs to be set to 1.
     GPUS:Union[int, list[int]] = 0
 
@@ -30,7 +24,6 @@ class Config:
     # number that your GPU can handle for best performance.
     TRAIN_IMAGES_PER_GPU:int = 2
     TEST_IMAGES_PER_GPU:int = 4
-    PRN_IMAGES_PER_GPU:int = 1
 
     # Number of training steps per epoch
     # This doesn't need to match the size of the training set. Tensorboard
@@ -44,15 +37,14 @@ class Config:
     # Number of validation steps to run at the end of every training epoch.
     # A bigger number improves accuracy of validation stats, but slows
     # down the training.
-    VALIDATION_STEPS:int = 50
+    VALIDATION_STEPS:int = 500
 
     # Backbone network architecture
     # Supported values are: resnet50, resnet101.
     # You can also provide a callable that should have the signature
     # of model.resnet_graph. If you do so, you need to supply a callable
     # to COMPUTE_BACKBONE_SHAPE as well
-    BACKBONE:Callable = staticmethod(keras.applications.ResNet101)
-    PREPROCESSING:Callable = staticmethod(keras.applications.resnet.preprocess_input)
+    BACKBONE:str = 'resnet101'
 
 
     # The strides of each layer of the FPN Pyramid. These values
@@ -65,9 +57,6 @@ class Config:
 
     # Size of the top-down layers used to build the feature pyramid
     TOP_DOWN_PYRAMID_SIZE:int = 256
-
-    # Number of classification classes (including background)
-    ORIGIN_NUM_CLASSES:int = 81  # Override in sub-classes
 
     # Length of square anchor side in pixels
     RPN_ANCHOR_SCALES:list[int] = field(default_factory=lambda:[32, 64, 128, 256, 512])
@@ -135,7 +124,8 @@ class Config:
     IMAGE_CHANNEL_COUNT:int = 3
 
     # Image mean (RGB)
-    MEAN_PIXEL:list[float] = field(default_factory=lambda:[123.7, 116.8, 103.9])
+    PIXEL_MEAN:list[float] = field(default_factory=lambda:[123.7, 116.8, 103.9])
+    PIXEL_STD:list[float] = field(default_factory=lambda:[58.395, 57.12 , 57.375])
 
     # Number of ROIs per image to feed to classifier/mask heads
     # The Mask RCNN paper uses 512 but often the RPN doesn't generate
@@ -190,7 +180,6 @@ class Config:
         "mrcnn_class_loss": 1.,
         "mrcnn_bbox_loss": 1.,
         "mrcnn_mask_loss": 1.,
-        'meta_loss': 1.
     })
 
 
@@ -210,6 +199,9 @@ class Config:
     # Gradient norm clipping
     GRADIENT_CLIP_NORM:float = 5.0
 
+
+    AUGMENTORS = ['HorizontalFlip', 'VerticalFlip', 'Rotate']
+
     def __post_init__(self):
         """Set values of computed attributes."""
         # Effective batch size
@@ -222,15 +214,6 @@ class Config:
         self.STRATEGY:tf.distribute.MirroredStrategy = tf.distribute.MirroredStrategy(devices=[f'/gpu:{gpu_id}' for gpu_id in gpus])
         self.TRAIN_BATCH_SIZE:int = self.TRAIN_IMAGES_PER_GPU * self.GPU_COUNT
         self.TEST_BATCH_SIZE:int = self.TEST_IMAGES_PER_GPU * self.GPU_COUNT
-        self.PRN_BATCH_SIZE:int = self.PRN_IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size
         self.IMAGE_SHAPE:np.ndarray = np.array([self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, self.IMAGE_CHANNEL_COUNT])
-        self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES
-
-    
-    def set_phase(self, phase):
-        if phase==1:
-            self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES - len(self.NOVEL_CLASSES)
-        else:
-            self.NUM_CLASSES = self.ORIGIN_NUM_CLASSES

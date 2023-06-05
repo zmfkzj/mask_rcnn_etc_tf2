@@ -176,7 +176,7 @@ class MetaFasterRcnn(FasterRcnn):
                 if validation_data is not None:
                     callbacks.on_test_begin()
                     self.param_image_ids.clear()
-                    self.val_results.clear()
+                    self.detection_results.clear()
                     for test_step,data in enumerate(validation_data):
                         callbacks.on_test_batch_begin(test_step)
                         input_datas = InputDatas(self.config, **data[0]).update_attentions(tf.cast(attentions, tf.float32)).to_dict()
@@ -414,5 +414,5 @@ class MetaFasterRcnn(FasterRcnn):
             results = attentions
         else:
             super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
-            results = self.val_results
+            results = self.detection_results
         return results

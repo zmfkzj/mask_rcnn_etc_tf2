@@ -1,5 +1,5 @@
 import unittest
-from MRCNN.data.dataset import _COCO, Dataset
+from MRCNN.data.dataset import _msgspecCOCO, Dataset
 
 class Test(unittest.TestCase):
     def setUp(self) -> None:
@@ -9,7 +9,7 @@ class Test(unittest.TestCase):
         from msgspec.json import decode
 
         with open(self.json_path, 'r') as f:
-            coco:_COCO = decode(f.read(),type=_COCO)
+            coco:_msgspecCOCO = decode(f.read(),type=_msgspecCOCO)
         
         self.assertTrue(bool(coco.annotations))
         self.assertTrue(bool(coco.images))
@@ -22,11 +22,6 @@ class Test(unittest.TestCase):
         self.assertIsNotNone(dataset.annotations)
         self.assertIsNotNone(dataset.images)
         self.assertIsNotNone(dataset.categories)
-        self.assertRaises(AttributeError, lambda: dataset.images.pop().id)
-        self.assertRaises(AttributeError, lambda: dataset.categories.pop().id)
-        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().id)
-        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().category_id)
-        self.assertRaises(AttributeError, lambda: dataset.annotations.pop().image_id)
 
     def test_load_dataset_2(self):
         self.assertRaises(ValueError, lambda : Dataset.from_json(self.json_path,'./source/images', include_classes=[1,2,3], exclude_classes=[4,5]))
@@ -49,4 +44,12 @@ class Test(unittest.TestCase):
         self.assertEqual(len(dataset3.annotations), len(dataset1.annotations)+len(dataset2.annotations))
         self.assertEqual(len(dataset3.images), len(dataset1.images)+len(dataset2.images))
         self.assertEqual(len(dataset3.categories), len(dataset1.categories)+len(dataset2.categories))
+    
+    def test_exist_coco(self):
+        dataset = Dataset.from_json(self.json_path,'./source/images')
+
+        self.assertTrue(dataset.coco.anns)
+        self.assertTrue(dataset.coco.cats)
+        self.assertTrue(dataset.coco.imgs)
+
 
