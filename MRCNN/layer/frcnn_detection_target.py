@@ -1,6 +1,6 @@
 import keras.api._v2.keras.layers as KL
 import tensorflow as tf
-from official.vision.ops.iou_similarity import iou
+import tensorflow_models as tfm
 
 from MRCNN import utils
 from MRCNN.config import Config
@@ -58,10 +58,10 @@ class Detectiontargets(KL.Layer):
         gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
 
         # Compute overlaps matrix [proposals, gt_boxes]
-        overlaps = iou(proposals, gt_boxes)
+        overlaps = tfm.vision.iou_similarity.iou(proposals, gt_boxes)
 
         # Compute overlaps with crowd boxes [proposals, crowd_boxes]
-        crowd_overlaps = iou(proposals, crowd_boxes)
+        crowd_overlaps = tfm.vision.iou_similarity.iou(proposals, crowd_boxes)
         crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
         no_crowd_bool = (crowd_iou_max < 0.001)
 
@@ -81,7 +81,7 @@ class Detectiontargets(KL.Layer):
         positive_count = tf.shape(positive_indices)[0]
         # Negative ROIs. Add enough to maintain positive:negative ratio.
         r = 1.0 / self.config.ROI_POSITIVE_RATIO
-        negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
+        negative_count = tf.cast(r * tf.cast(positive_count, tf.float16), tf.int32) - positive_count
         negative_indices = tf.random.shuffle(negative_indices)[:negative_count]
         # Gather selected ROIs
         positive_rois = tf.gather(proposals, positive_indices)
@@ -91,8 +91,8 @@ class Detectiontargets(KL.Layer):
         positive_overlaps = tf.gather(overlaps, positive_indices)
         roi_gt_box_assignment = tf.cond(
             tf.greater(tf.shape(positive_overlaps)[1], 0),
-            true_fn = lambda: tf.argmax(positive_overlaps, axis=1),
-            false_fn = lambda: tf.cast(tf.constant([]),tf.int64)
+            true_fn = lambda: tf.cast(tf.argmax(positive_overlaps, axis=1), tf.int32),
+            false_fn = lambda: tf.cast(tf.constant([]),tf.int32)
         )
         roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
         roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
@@ -157,9 +157,9 @@ class DetectionTargetLayer(KL.Layer):
         # TODO: Rename target_bbox to target_deltas for clarity
         outputs = tf.map_fn(lambda t: self.detection_targets_graph(*t),
                             (proposals, gt_class_ids, gt_boxes),
-                            fn_output_signature=(tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32), 
-                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE],dtype=tf.int64), 
-                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32)))
+                            fn_output_signature=(tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float16), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE],dtype=tf.int16), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float16)))
 
         return outputs
 

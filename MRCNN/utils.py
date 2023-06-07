@@ -15,8 +15,8 @@ def box_refinement(box, gt_box):
     box and gt_box are [N, (y1, x1, y2, x2)]. (y2, x2) is
     assumed to be outside the box.
     """
-    box = tf.cast(box,tf.float32)
-    gt_box = tf.cast(gt_box, tf.float32)
+    box = tf.cast(box,tf.float16)
+    gt_box = tf.cast(gt_box, tf.float16)
 
     height = box[:, 2] - box[:, 0]
     width = box[:, 3] - box[:, 1]
@@ -115,7 +115,7 @@ def norm_boxes(boxes, shape):
     w = shape[1]
     scale = tf.stack([h - 1, w - 1, h - 1, w - 1])
     shift = tf.stack([0, 0, 1, 1])
-    return tf.divide((tf.cast(boxes,tf.float32) - tf.cast(shift, tf.float32)), tf.cast(scale,tf.float32))
+    return tf.divide((tf.cast(boxes,tf.float16) - tf.cast(shift, tf.float16)), tf.cast(scale,tf.float16))
 
 
 
@@ -142,10 +142,9 @@ def compute_backbone_shapes(config:Config):
     Returns:
         [N, (height, width)]. Where N is the number of stages
     """
-    return np.array(
-    [[int(math.ceil(config.IMAGE_SHAPE[0] / stride)),
-        int(math.ceil(config.IMAGE_SHAPE[1] / stride))]
-        for stride in config.BACKBONE_STRIDES])
+    return [tuple([int(math.ceil(config.IMAGE_SHAPE[0] / stride)), 
+             int(math.ceil(config.IMAGE_SHAPE[1] / stride))]) 
+             for stride in config.BACKBONE_STRIDES]
 
 
 def unmold_detections(detections, original_image_shape, image_shape, window, mrcnn_mask=None):

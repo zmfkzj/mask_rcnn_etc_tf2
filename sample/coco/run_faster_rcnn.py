@@ -11,6 +11,10 @@ from MRCNN.enums import TrainLayers, Mode
 import sys
 sys.setrecursionlimit(10**6)
 
+# tf.config.run_functions_eagerly(True)
+
+policy = tf.keras.mixed_precision.Policy('mixed_float16')
+tf.keras.mixed_precision.set_global_policy(policy)
 
 
 config = Config(GPUS=0,

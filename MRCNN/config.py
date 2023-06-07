@@ -44,7 +44,7 @@ class Config:
     # You can also provide a callable that should have the signature
     # of model.resnet_graph. If you do so, you need to supply a callable
     # to COMPUTE_BACKBONE_SHAPE as well
-    BACKBONE:str = 'resnet101'
+    BACKBONE:str = 'ResNet101'
 
 
     # The strides of each layer of the FPN Pyramid. These values
@@ -89,39 +89,6 @@ class Config:
     # memory load. Recommended when using high-resolution images.
     USE_MINI_MASK:bool = True
     MINI_MASK_SHAPE:tuple[int,int] = (56, 56)  # (height, width) of the mini-mask
-
-    # Input image resizinga7c202b9-6da1-44fa-8359-7cfa1c8576f7
-    # Generally, use the "square" resizing mode for training and predicting
-    # and it should work well in most cases. In this mode, images are scaled
-    # up such that the small side is = IMAGE_MIN_DIM, but ensuring that the
-    # scaling doesn't make the long side > IMAGE_MAX_DIM. Then the image is
-    # padded with zeros to make it a square so multiple images can be put
-    # in one batch.
-    # Available resizing modes:
-    # none:   No resizing or padding. Return the image unchanged.
-    # square: Resize and pad with zeros to get a square image
-    #         of size [max_dim, max_dim].
-    # pad64:  Pads width and height with zeros to make them multiples of 64.
-    #         If IMAGE_MIN_DIM or IMAGE_MIN_SCALE are not None, then it scales
-    #         up before padding. IMAGE_MAX_DIM is ignored in this mode.
-    #         The multiple of 64 is needed to ensure smooth scaling of feature
-    #         maps up and down the 6 levels of the FPN pyramid (2**6=64).
-    # crop:   Picks random crops from the image. First, scales the image based
-    #         on IMAGE_MIN_DIM and IMAGE_MIN_SCALE, then picks a random crop of
-    #         size IMAGE_MIN_DIM x IMAGE_MIN_DIM. Can be used in training only.
-    #         IMAGE_MAX_DIM is not used in this mode.
-    IMAGE_RESIZE_MODE:str = "square"
-    IMAGE_MIN_DIM:int = 800
-    IMAGE_MAX_DIM:int = 1024
-    # Minimum scaling ratio. Checked after MIN_IMAGE_DIM and can force further
-    # up scaling. For example, if set to 2 then images are scaled up to double
-    # the width and height, or more, even if MIN_IMAGE_DIM doesn't require it.
-    # However, in 'square' mode, it can be overruled by IMAGE_MAX_DIM.
-    IMAGE_MIN_SCALE:int = 0
-    # Number of color channels per image. RGB = 3, grayscale = 1, RGB-D = 4
-    # Changing this requires other changes in the code. See the WIKI for more
-    # details: https://github.com/matterport/Mask_RCNN/wiki
-    IMAGE_CHANNEL_COUNT:int = 3
 
     # Image mean (RGB)
     PIXEL_MEAN:list[float] = field(default_factory=lambda:[123.7, 116.8, 103.9])
@@ -199,8 +166,9 @@ class Config:
     # Gradient norm clipping
     GRADIENT_CLIP_NORM:float = 5.0
 
-
-    AUGMENTORS = ['HorizontalFlip', 'VerticalFlip', 'Rotate']
+    AUGMENTORS = ['HorizontalFlip', 'VerticalFlip', 'RandomRotate90']
+    
+    IMAGE_SHAPE:np.ndarray = np.array([1024, 1024, 3])
 
     def __post_init__(self):
         """Set values of computed attributes."""
@@ -216,4 +184,3 @@ class Config:
         self.TEST_BATCH_SIZE:int = self.TEST_IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size
-        self.IMAGE_SHAPE:np.ndarray = np.array([self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, self.IMAGE_CHANNEL_COUNT])

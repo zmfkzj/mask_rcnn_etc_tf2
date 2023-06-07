@@ -28,11 +28,11 @@ class FasterRcnn(BaseModel):
         super().__init__(config, dataset, name=name)
 
         self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
-        self.fpn_classifier = FPN_classifier(config.POOL_SIZE, config.NUM_CLASSES, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
+        self.fpn_classifier = FPN_classifier(config.POOL_SIZE, self.num_classes, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
     
     def train_step(self, data):
-        input_images, input_gt_boxes, input_gt_class_ids, input_rpn_match, input_rpn_bbox= data
+        input_images, input_gt_boxes, input_gt_class_ids, input_rpn_match, input_rpn_bbox, input_gt_masks= data
         batch_size = tf.shape(input_images)[0]
 
         with tf.GradientTape() as tape:
@@ -48,7 +48,7 @@ class FasterRcnn(BaseModel):
             class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits)
             bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
 
-            reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+            reg_losses = tf.add_n([tf.cast(keras.regularizers.l2(self.config.WEIGHT_DECAY)(w), tf.float16) / tf.cast(tf.size(w), tf.float16)
                             for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
             losses = [reg_losses, 
@@ -56,10 +56,12 @@ class FasterRcnn(BaseModel):
                     rpn_bbox_loss     * self.config.LOSS_WEIGHTS['rpn_bbox_loss'], 
                     class_loss        * self.config.LOSS_WEIGHTS['mrcnn_class_loss'], 
                     bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']]
-            losses = tf.nn.compute_average_loss(losses, global_batch_size=self.config.TRAIN_BATCH_SIZE)
+            losses = [loss / self.config.GPU_COUNT for loss in losses]
+            scaled_losses = [self.optimizer.get_scaled_loss(loss) for loss in losses]
 
-        gradients = tape.gradient(losses, self.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        scaled_grad = tape.gradient(scaled_losses, self.trainable_variables)
+        grad = self.optimizer.get_unscaled_gradients(scaled_grad)
+        self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
 
         mean_loss = tf.reduce_mean(losses)
         reg_losses, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss = losses
@@ -92,7 +94,7 @@ class FasterRcnn(BaseModel):
     def forward_predict_test(self, rpn_rois, mrcnn_feature_maps, input_window):
         _rpn_rois = KL.Lambda(lambda r: 
                           tf.cast(tf.vectorized_map(lambda x: 
-                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rpn_rois)
+                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rpn_rois)
         roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, _rpn_rois)
 
         # Network Heads
@@ -119,7 +121,7 @@ class FasterRcnn(BaseModel):
 
         _rois = KL.Lambda(lambda r: 
                           tf.cast(tf.vectorized_map(lambda x: 
-                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rois)
+                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rois)
         roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, _rois)
 
         # Network Heads

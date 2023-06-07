@@ -1,7 +1,7 @@
 import unittest
 from MRCNN.data.dataset import _msgspecCOCO, Dataset
 
-class Test(unittest.TestCase):
+class TestDataDataset(unittest.TestCase):
     def setUp(self) -> None:
         self.json_path = 'test/source/instances_train_fix.json'
 

@@ -1,5 +1,4 @@
 import re
-from copy import copy, deepcopy
 
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
@@ -7,17 +6,18 @@ import keras.api._v2.keras.models as KM
 import numpy as np
 import pycocotools.mask as maskUtils
 import tensorflow as tf
-from tensorflow.python.keras.saving.saved_model.utils import \
-    no_automatic_dependency_tracking_scope
+from tensorflow.python.keras.saving.saved_model.utils import no_automatic_dependency_tracking_scope
 
 from MRCNN import utils
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
+from MRCNN.data.utils import get_anchors
 from MRCNN.enums import TrainLayers
 from MRCNN.layer.proposal import ProposalLayer
 from MRCNN.metric import F1Score
 from MRCNN.model.neck import Neck
 from MRCNN.model.rpn import RPN
+from MRCNN.model.backbones import backbones
 
 from ..utils import compute_backbone_shapes, unmold_detections
 
@@ -36,8 +36,10 @@ class BaseModel(KM.Model):
         super().__init__(name=name)
         self.config = config
         self.dataset = dataset
+        self.num_classes = len(self.dataset.categories)
 
-        self.anchors = self.get_anchors(config.IMAGE_SHAPE)
+        self.anchors = get_anchors(config)
+        self.anchors = utils.norm_boxes(self.anchors, config.IMAGE_SHAPE[:2])
 
         h, w = config.IMAGE_SHAPE[:2]
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
@@ -46,6 +48,8 @@ class BaseModel(KM.Model):
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
     
         self.backbone = self.make_backbone_model(config)
+        self.backbone_output_shapes = compute_backbone_shapes(config)
+
         self.neck = Neck(config)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
@@ -59,10 +63,10 @@ class BaseModel(KM.Model):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
-        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-1][:2]+(256,))
-        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-2][:2]+(256,))
-        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3][:2]+(256,))
-        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-4][:2]+(256,))
+        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-5]+(256,))
+        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-4]+(256,))
+        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3]+(256,))
+        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-2]+(256,))
 
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
@@ -111,29 +115,9 @@ class BaseModel(KM.Model):
 
     
     def make_backbone_model(self, config: Config):
-        backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=list(config.IMAGE_SHAPE), dtype=tf.float32),
-                                                 include_top=False,
-                                                 weights='imagenet')
-
-        output_channels = (2048,1024,512,256)
-        self.backbone_output_shapes = compute_backbone_shapes(config)[:-1][::-1]
-        self.backbone_output_shapes = list(zip(*zip(*self.backbone_output_shapes), output_channels))
-        idx = 0
-        output_ids = []
-        for i, layer in enumerate(backbone.layers[::-1]):
-            if tuple(layer.output_shape[1:]) == tuple(self.backbone_output_shapes[idx]):
-                output_ids.append(i)
-                idx+=1
-            if idx==len(self.backbone_output_shapes):
-                break
-        output_ids =output_ids[:4]
-
-        backbone:KM.Model = config.BACKBONE(input_tensor=KL.Input(shape=(None,None,3), dtype=tf.float32),
-                                                 include_top=False,
-                                                 weights='imagenet')
-        outputs = [layer.output for i, layer in enumerate(backbone.layers[::-1]) if i in output_ids][::-1]
-
-        model = keras.Model(inputs=backbone.inputs, outputs=outputs)
+        model_name = config.BACKBONE
+        _, builder = backbones[model_name]
+        model = builder(model_name)
         return model
         
 
@@ -175,19 +159,6 @@ class BaseModel(KM.Model):
                 print("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
-
-    def get_anchors(self, image_shape):
-        """Returns anchor pyramid for the given image size."""
-        backbone_shapes = compute_backbone_shapes(self.config)
-        # Generate Anchors
-        anchors = utils.generate_pyramid_anchors(
-            self.config.RPN_ANCHOR_SCALES,
-            self.config.RPN_ANCHOR_RATIOS,
-            backbone_shapes,
-            self.config.BACKBONE_STRIDES,
-            self.config.RPN_ANCHOR_STRIDE)
-        norm_anchor = utils.norm_boxes(anchors, image_shape[:2])
-        return norm_anchor
 
     def get_metrics(self, eval_type='bbox', iou_thresh=0.5):
         if self.detection_results:

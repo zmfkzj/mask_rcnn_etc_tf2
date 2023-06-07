@@ -19,7 +19,7 @@ class BatchPackGraph(KL.Layer):
         """Picks different number of values from each row
         in x depending on the values in counts.
         """
-        outputs = tf.zeros([0,4],tf.float32)
+        outputs = tf.zeros([0,4],tf.float16)
         for i in tf.range(num_rows):
             tf.autograph.experimental.set_loop_options(shape_invariants=[(outputs, tf.TensorShape([None,4]))])
             outputs = tf.concat([outputs, x[i, :counts[i]]], axis=0)
@@ -43,10 +43,10 @@ class NormBoxesGraph(KL.Layer):
         Returns:
             [..., (y1, x1, y2, x2)] in normalized coordinates
         """
-        h, w = tf.split(tf.cast(shape, tf.float32), 2)
-        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
-        shift = tf.constant([0., 0., 1., 1.])
-        boxes = tf.cast(boxes, tf.float32)
+        h, w = tf.split(tf.cast(shape, tf.float16), 2)
+        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0, dtype=tf.float16)
+        shift = tf.constant([0., 0., 1., 1.], dtype=tf.float16)
+        boxes = tf.cast(boxes, tf.float16)
         return tf.divide(boxes - shift, scale)
 
 
@@ -62,7 +62,7 @@ class DenormBoxesGraph(KL.Layer):
         Returns:
             [..., (y1, x1, y2, x2)] in pixel coordinates
         """
-        h, w = tf.split(tf.cast(shape, tf.float32), 2)
-        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
-        shift = tf.constant([0., 0., 1., 1.])
-        return tf.cast(tf.round(tf.multiply(boxes, scale) + shift), tf.int64)
+        h, w = tf.split(tf.cast(shape, tf.float16), 2)
+        scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0, dtype=tf.float16)
+        shift = tf.constant([0., 0., 1., 1.], dtype=tf.float16)
+        return tf.cast(tf.round(tf.multiply(boxes, scale) + shift), tf.int16)

@@ -15,7 +15,6 @@ from MRCNN.utils import LossWeight
 
 
 config = Config(GPUS=[0,1],
-                ORIGIN_NUM_CLASSES=80+1,
                 LEARNING_RATE=0.0001,
                 TRAIN_IMAGES_PER_GPU=4,
                 TEST_IMAGES_PER_GPU=10,
@@ -32,7 +31,7 @@ class CustomScheduler(keras.optimizers.schedules.ExponentialDecay):
     def __call__(self, step):
         super_lr = super().__call__(step)
         return tf.cond(step<=self.burnin_step, 
-                lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float32),
+                lambda : tf.cast(self.initial_learning_rate*tf.math.pow(step/self.burnin_step,4),tf.float16),
                 lambda : super_lr)
 
 

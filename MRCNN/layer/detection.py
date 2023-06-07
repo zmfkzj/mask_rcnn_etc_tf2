@@ -33,7 +33,7 @@ class DetectionLayer(KL.Layer):
         # Run detection refinement graph on each item in the batch
         detections_batch = tf.map_fn(lambda x: self.refine_detections_graph(*x),
                                      (rois, mrcnn_class, mrcnn_bbox, window),
-                                     fn_output_signature=tf.TensorSpec(shape=[None,6], dtype=tf.float32))
+                                     fn_output_signature=tf.TensorSpec(shape=[None,6], dtype=tf.float16))
 
         # Reshape output
         # [batch, num_detections, (y1, x1, y2, x2, class_id, class_score)] in
@@ -58,9 +58,9 @@ class DetectionLayer(KL.Layer):
             coordinates are normalized.
         """
         # Class IDs per ROI
-        class_ids = tf.argmax(probs, axis=1, output_type=tf.int64)
+        class_ids = tf.cast(tf.argmax(probs, axis=1), tf.int32)
         # Class probability of the top class of each ROI
-        indices = tf.stack([tf.cast(tf.range(tf.shape(probs)[0]), tf.int64), class_ids], axis=1)
+        indices = tf.stack([tf.cast(tf.range(tf.shape(probs)[0]), tf.int32), class_ids], axis=1)
         class_scores = tf.gather_nd(probs, indices)
         # Class-specific bounding box deltas
         deltas_specific = tf.gather_nd(deltas, indices)
@@ -110,7 +110,7 @@ class DetectionLayer(KL.Layer):
         # 2. Map over class IDs
         nms_keep = tf.map_fn(nms_keep_map, 
                              unique_pre_nms_class_ids,
-                             fn_output_signature=tf.TensorSpec(shape=[100],dtype=tf.int64))
+                             fn_output_signature=tf.TensorSpec(shape=[100],dtype=tf.int16))
         # 3. Merge results into one list, and remove -1 padding
         nms_keep = tf.reshape(nms_keep, [-1])
         nms_keep = tf.gather(nms_keep, tf.where(nms_keep > -1)[:, 0])
@@ -129,7 +129,7 @@ class DetectionLayer(KL.Layer):
         # Coordinates are normalized.
         detections = tf.concat([
             tf.gather(refined_rois, keep),
-            tf.cast(tf.gather(class_ids, keep), tf.float32)[..., tf.newaxis],
+            tf.cast(tf.gather(class_ids, keep), tf.float16)[..., tf.newaxis],
             tf.gather(class_scores, keep)[..., tf.newaxis]
             ], axis=1)
 

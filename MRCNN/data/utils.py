@@ -1,8 +1,10 @@
 from functools import partial
+
+import albumentations as A
+import cv2
 import numpy as np
 import tensorflow as tf
 import tensorflow_models as tfm
-import albumentations as A
 from pycocotools import mask as maskUtils
 
 from MRCNN.config import Config
@@ -15,7 +17,7 @@ def load_gt(dataset:Dataset, ann_ids, h, w):
     ann_ids = [ann_id for ann_id in ann_ids if ann_id!=0]
     anns = dataset.coco.loadAnns(ann_ids)
 
-    gts = [gt for gt in [load_ann(ann, (h,w)) for ann in anns] if gt is not None]
+    gts = [gt for gt in [load_ann(dataset, ann, (h,w)) for ann in anns] if gt is not None]
     if gts:
         boxes, loader_class_ids, masks = list(zip(*gts))
         
@@ -40,7 +42,7 @@ def padding_ann_ids(ann_ids, max_gt_instances):
     
     ann_ids = tf.cast(ann_ids, tf.int64)
 
-    if tf.shape(ann_ids)[0]>max_gt_instances:
+    if tf.cast(tf.shape(ann_ids)[0], tf.int16)>max_gt_instances:
         ann_ids = tf.random.shuffle(ann_ids)[:max_gt_instances]
         ann_ids = f(ann_ids)
     else:
@@ -287,7 +289,7 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
     #
     # 1. Set negative anchors first. They get overwritten below if a GT box is
     # matched to them. Skip boxes in crowd areas.
-    anchor_iou_argmax = tf.argmax(overlaps, axis=1, output_type=tf.int32)
+    anchor_iou_argmax = tf.cast(tf.argmax(overlaps, axis=1), tf.int32)
     
     indices = tf.transpose([tf.range(tf.shape(overlaps)[0]), anchor_iou_argmax])
     anchor_iou_max = tf.gather_nd(overlaps,indices)
@@ -392,15 +394,17 @@ def preprocessing_train(path,
                         rpn_bbox_std_dev,
                         max_gt_instances, 
                         mini_mask_shape,
+                        dataset,
                         augmentor=None):
     image = load_image(path)
     boxes, loader_class_ids, masks =\
-        tf.py_function(load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16))
+        tf.py_function(lambda ann_ids, h, w: load_gt(dataset, ann_ids, h, w), 
+                       (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16, tf.bool))
 
     if augmentor is not None:
-        image, boxes, masks =  tf.py_function(augmentor, (image, boxes, masks), (tf.uint8, tf.float16, tf.bool))
+        image, boxes, masks, loader_class_ids =  tf.py_function(augmentor, (image, boxes, masks, loader_class_ids), (tf.uint8, tf.float16, tf.bool, tf.int16))
 
-    resized_image, resized_boxes, resized_masks = resize(image, boxes, masks, resize_shape)
+    resized_image, resized_boxes, resized_masks = resize(image, boxes, masks, resize_shape, mini_mask_shape)
     
     norm_image = normalize(resized_image, pixel_mean, pixel_std)
 
@@ -432,30 +436,36 @@ def get_augmentor(config: Config):
 
     transforms = []
     for a in augment_list:
-        transforms.append(getattr(A, a))
+        transforms.append(getattr(A, a)(p=0.5))
 
     augmentor = partial(_augmentor,
                          transforms=transforms)
     return augmentor
     
     
-def _augmentor(img, box, mask, transforms):
-    img = img.numpy().astype(np.uint8)
-    box = box.numpy()
-    mask = mask.numpy()
+def _augmentor(img, box, masks, classes, transforms):
+    img = img.numpy().round().astype(np.uint8)
+    box = box.numpy()[:,[1,0,3,2]]
+    # mask = np.expand_dims(mask.numpy().astype(np.uint8), -1).repeat(3, -1)
+    masks = [m for m in masks.numpy().astype(np.uint8)]
+    classes = classes.numpy()
+
+    box_with_label = np.concatenate([box, np.expand_dims(classes, -1)], -1)
+
 
     transform = A.Compose(transforms,
-                    bbox_params=A.BboxParams(format='pascal_voc'))
+                    bbox_params=A.BboxParams(format='pascal_voc', min_visibility=0.1))
     
-    y1,x1,y2,x2 = tf.unstack(box, axis=-1)
-    box = tf.stack([x1,y1,y2,x2], axis=-1)
-    t = transform(image=img,mask=mask,bboxes=box)
+    t = transform(image=img,masks=masks,bboxes=box_with_label)
     t_img = t['image']
-    t_box = t['bboxes']
-    t_mask = t['mask']
+    t_box_with_label = np.array(t['bboxes'])
+    if t_box_with_label.size == 0:
+        t_box_with_label = np.zeros([0,5])
+    t_box = t_box_with_label[:,:4]
+    t_classes = t_box_with_label[:,4]
+    t_masks = np.stack(t['masks']).astype(np.bool_)
     
-    x1,y1,x2,y2 = tf.unstack(t_box, axis=-1)
-    t_box = tf.stack([y1,x1,y2,x2], axis=-1)
+    t_box = t_box[:, [1,0,3,2]]
 
-    return t_img, t_box, t_mask
+    return t_img, t_box, t_masks, t_classes
 

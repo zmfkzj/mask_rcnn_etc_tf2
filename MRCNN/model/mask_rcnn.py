@@ -59,7 +59,7 @@
 #             bbox_loss = outputs.bbox_loss
 #             mask_loss = outputs.mask_loss
 
-#             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+#             reg_losses = tf.add_n([keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float16)
 #                             for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
 #             losses = [reg_losses, 
@@ -136,7 +136,7 @@
         
 #         _rpn_rois = KL.Lambda(lambda r: 
 #                           tf.cast(tf.vectorized_map(lambda x: 
-#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rpn_rois)
+#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rpn_rois)
 #         roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, _rpn_rois)
 
 #         # Network Heads
@@ -149,7 +149,7 @@
 #         # roi_seg_feature = self.ROIAlign_mask(detection_boxes, self.config.IMAGE_SHAPE, mrcnn_feature_maps)
 #         _detection_boxes = KL.Lambda(lambda r: 
 #                           tf.cast(tf.vectorized_map(lambda x: 
-#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(detection_boxes)
+#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(detection_boxes)
 #         roi_seg_feature = self.ROIAlign_mask(mrcnn_feature_maps, _detection_boxes)
 #         mrcnn_mask = self.fpn_mask(roi_seg_feature, training=False)
 
@@ -206,7 +206,7 @@
 
 #         _rois = KL.Lambda(lambda r: 
 #                           tf.cast(tf.vectorized_map(lambda x: 
-#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float32))(rois)
+#                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rois)
 #         roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, _rois)
 #         roi_mask_features = self.ROIAlign_mask(mrcnn_feature_maps, _rois)
 

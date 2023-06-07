@@ -61,7 +61,7 @@ def make_test_dataloader(dataset: Dataset, config: Config):
         .zip((pathes,img_ids))\
         .repeat()\
         .shuffle(len(dataset.images)) \
-        .map(preprocessing, num_parallel_calls=tf.data.AUTOTUNE)\
+        .map(lambda pathes, img_ids: preprocessing(path=pathes, img_id=img_ids), num_parallel_calls=tf.data.AUTOTUNE)\
         .batch(batch_size)\
         .prefetch(tf.data.AUTOTUNE)
     return data_loader
@@ -90,13 +90,14 @@ def make_train_dataloader(dataset:Dataset, config: Config):
                             rpn_bbox_std_dev=config.RPN_BBOX_STD_DEV,
                             max_gt_instances=config.MAX_GT_INSTANCES, 
                             mini_mask_shape=config.MINI_MASK_SHAPE,
+                            dataset=dataset,
                             augmentor=augmentor)
 
     data_loader = tf.data.Dataset\
         .zip((pathes, ann_ids))\
         .repeat()\
         .shuffle(len(dataset.images))\
-        .map(preprocessing, num_parallel_calls=tf.data.AUTOTUNE)\
+        .map(lambda pathes, ann_ids: preprocessing(path=pathes, ann_ids=ann_ids), num_parallel_calls=tf.data.AUTOTUNE)\
         .batch(batch_size)\
         .prefetch(tf.data.AUTOTUNE)
     return data_loader

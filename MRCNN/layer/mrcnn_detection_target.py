@@ -85,7 +85,7 @@ class Detectiontargets(KL.Layer):
         positive_count = tf.shape(positive_indices)[0]
         # Negative ROIs. Add enough to maintain positive:negative ratio.
         r = 1.0 / self.config.ROI_POSITIVE_RATIO
-        negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
+        negative_count = tf.cast(r * tf.cast(positive_count, tf.float16), tf.int32) - positive_count
         negative_indices = tf.random.shuffle(negative_indices)[:negative_count]
         # Gather selected ROIs
         positive_rois = tf.gather(proposals, positive_indices)
@@ -95,8 +95,8 @@ class Detectiontargets(KL.Layer):
         positive_overlaps = tf.gather(overlaps, positive_indices)
         roi_gt_box_assignment = tf.cond(
             tf.greater(tf.shape(positive_overlaps)[1], 0),
-            true_fn = lambda: tf.argmax(positive_overlaps, axis=1),
-            false_fn = lambda: tf.cast(tf.constant([]),tf.int64)
+            true_fn = lambda: tf.cast(tf.argmax(positive_overlaps, axis=1), tf.int16),
+            false_fn = lambda: tf.cast(tf.constant([]),tf.int16)
         )
         roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
         roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
@@ -116,7 +116,7 @@ class Detectiontargets(KL.Layer):
         if self.config.USE_MINI_MASK:
             # Transform ROI coordinates from normalized image space
             # to normalized mini-mask space.
-            y1, x1, y2, x2 = tf.split(tf.cast(positive_rois, tf.float32), 4, axis=1)
+            y1, x1, y2, x2 = tf.split(tf.cast(positive_rois, tf.float16), 4, axis=1)
             gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
             gt_h = gt_y2 - gt_y1
             gt_w = gt_x2 - gt_x1
@@ -126,7 +126,7 @@ class Detectiontargets(KL.Layer):
             x2 = (x2 - gt_x1) / gt_w
             boxes = tf.concat([y1, x1, y2, x2], 1)
         box_ids = tf.range(0, tf.shape(roi_masks)[0])
-        masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
+        masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float16), boxes,
                                         box_ids,
                                         self.config.MASK_SHAPE)
         # Remove the extra dimension from masks.
@@ -195,10 +195,10 @@ class DetectionTargetLayer(KL.Layer):
         # TODO: Rename target_bbox to target_deltas for clarity
         outputs = tf.map_fn(lambda t: self.detection_targets_graph(*t),
                             (proposals, gt_class_ids, gt_boxes, gt_masks),
-                            fn_output_signature=(tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32), 
-                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE],dtype=tf.int64), 
-                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float32), 
-                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,*self.config.MASK_SHAPE],dtype=tf.float32)))
+                            fn_output_signature=(tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float16), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE],dtype=tf.int16), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,4],dtype=tf.float16), 
+                                                 tf.TensorSpec(shape = [self.config.TRAIN_ROIS_PER_IMAGE,*self.config.MASK_SHAPE],dtype=tf.float16)))
 
         return outputs
 

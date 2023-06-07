@@ -18,20 +18,20 @@ class DataLoader(frcnn_data_loader.DataLoader):
         if gts:
             boxes, masks, dataloader_class_ids = tuple(zip(*gts))
             
-            boxes = tf.cast(tf.stack(boxes), tf.float32)
+            boxes = tf.cast(tf.stack(boxes), tf.float16)
             masks = tf.cast(tf.stack(masks), tf.bool)
-            dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int64)
+            dataloader_class_ids = tf.cast(tf.stack(dataloader_class_ids), tf.int16)
         else:
-            boxes = tf.zeros([0,4], dtype=tf.float32)
+            boxes = tf.zeros([0,4], dtype=tf.float16)
             masks = tf.zeros([0,h,w], dtype=tf.bool)
-            dataloader_class_ids = tf.zeros([0], dtype=tf.int64)
+            dataloader_class_ids = tf.zeros([0], dtype=tf.int16)
         return boxes, masks, dataloader_class_ids
 
     @tf.function
     def preprocessing_train(self, path, ann_ids):
         image = self.load_image(path)
         boxes, masks, dataloader_class_ids =\
-            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float32, tf.bool, tf.int64))
+            tf.py_function(self.load_gt, (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.bool, tf.int16))
     
         if self.augmentations is not None:
             image, boxes, masks = \
@@ -40,15 +40,15 @@ class DataLoader(frcnn_data_loader.DataLoader):
         resized_image, resized_boxes, minimize_masks = \
             self.resize(image, boxes, masks)
 
-        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float32))
+        preprocessed_image = self.config.PREPROCESSING(tf.cast(resized_image, tf.float16))
 
         rpn_match, rpn_bbox = \
             self.build_rpn_targets(dataloader_class_ids, resized_boxes)
 
         
-        pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float32)
+        pooled_box = tf.zeros([self.config.MAX_GT_INSTANCES,4],dtype=tf.float16)
         pooled_mask = tf.zeros([self.config.MAX_GT_INSTANCES,*self.config.MINI_MASK_SHAPE],dtype=tf.bool)
-        pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int64)
+        pooled_class_id = tf.zeros([self.config.MAX_GT_INSTANCES],dtype=tf.int16)
 
         instance_count = tf.shape(boxes)[0]
         if instance_count>self.config.MAX_GT_INSTANCES:
@@ -121,7 +121,7 @@ class DataLoader(frcnn_data_loader.DataLoader):
         
         return tf.py_function(_augment, 
                             [image,bbox,masks],
-                            (tf.uint8,tf.float32,tf.bool), name='augment')
+                            (tf.uint8,tf.float16,tf.bool), name='augment')
 
 
     @staticmethod
@@ -136,10 +136,10 @@ class DataLoader(frcnn_data_loader.DataLoader):
             m, b = arg
             m = tf.ensure_shape(m, [None,None])
             m = tf.cast(m,tf.bool)
-            y1 = tf.cast(tf.round(b[0]), tf.int64)
-            x1 = tf.cast(tf.round(b[1]), tf.int64)
-            y2 = tf.cast(tf.round(b[2]), tf.int64)
-            x2 = tf.cast(tf.round(b[3]), tf.int64)
+            y1 = tf.cast(tf.round(b[0]), tf.int16)
+            x1 = tf.cast(tf.round(b[1]), tf.int16)
+            y2 = tf.cast(tf.round(b[2]), tf.int16)
+            x2 = tf.cast(tf.round(b[3]), tf.int16)
 
             m = m[y1:y2, x1:x2]
             if tf.size(m) == 0:

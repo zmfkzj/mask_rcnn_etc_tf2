@@ -12,8 +12,8 @@ class SmoothL1Loss(KL.Layer):
         y_true and y_pred are typically: [N, 4], but could be any shape.
         """
 
-        diff = tf.abs(tf.cast(y_true,tf.float32) - y_pred)
-        less_than_one = tf.cast(tf.less(diff, 1.0), "float32")
+        diff = tf.abs(tf.cast(y_true,tf.float16) - y_pred)
+        less_than_one = tf.cast(tf.less(diff, 1.0), tf.float16)
         loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
         return loss
 
@@ -34,7 +34,7 @@ class RpnClassLossGraph(KL.Layer):
         # Squeeze last dim to simplify
         # rpn_match = tf.squeeze(rpn_match, -1)
         # Get anchor classes. Convert the -1/+1 match to 0/1 values.
-        anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int64)
+        anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int32)
         # Positive and Negative anchors contribute to the loss,
         # but neutral anchors (match value = 0) don't.
         indices = tf.where(tf.not_equal(rpn_match, 0))
@@ -45,7 +45,7 @@ class RpnClassLossGraph(KL.Layer):
         loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
         # anchor_class = tf.one_hot(anchor_class,2)
         # loss = self.focal_loss(anchor_class, rpn_class_logits)
-        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0))
+        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0, dtype=tf.float16))
         return loss
 
 
@@ -80,7 +80,7 @@ class RpnBboxLossGraph(KL.Layer):
 
         loss = self.smooth_l1(target_bbox, rpn_bbox)
         
-        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0))
+        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0, dtype=tf.float16))
         # loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:np.nan)
         return loss
 
@@ -127,13 +127,13 @@ class MrcnnBboxLossGraph(KL.Layer):
         # Reshape to merge batch and roi dimensions for simplicity.
         target_class_ids = tf.reshape(target_class_ids, (-1,))
         target_bbox = tf.reshape(target_bbox, (-1, 4))
-        pred_bbox = tf.reshape(pred_bbox, (-1, tf.shape(pred_bbox)[2], 4))
+        pred_bbox = tf.reshape(pred_bbox, (-1, tf.shape(pred_bbox)[2], 4),)
 
         # Only positive ROIs contribute to the loss. And only
         # the right class_id of each ROI. Get their indices.
-        positive_roi_ix = tf.where(target_class_ids > 0)[:, 0]
+        positive_roi_ix = tf.cast(tf.where(target_class_ids > 0)[:, 0], tf.int32)
         positive_roi_class_ids = tf.cast(
-            tf.gather(target_class_ids, positive_roi_ix), tf.int64)
+            tf.gather(target_class_ids, positive_roi_ix), tf.int32)
         indices = tf.stack([positive_roi_ix, positive_roi_class_ids], axis=1)
 
         # Gather the deltas (predicted and true) that contribute to loss
@@ -143,7 +143,7 @@ class MrcnnBboxLossGraph(KL.Layer):
         # Smooth-L1 Loss
         loss = tf.cond(tf.size(target_bbox) > 0,
                        lambda: SmoothL1Loss()(y_true=target_bbox, y_pred=pred_bbox),
-                       lambda: tf.constant(0.0))
+                       lambda: tf.constant(0.0, dtype=tf.float16))
         loss = tf.reduce_mean(loss)
         return loss
 
@@ -170,9 +170,9 @@ class MrcnnMaskLossGraph(KL.Layer):
 
         # Only positive ROIs contribute to the loss. And only
         # the class specific mask of each ROI.
-        positive_ix = tf.where(target_class_ids > 0)[:, 0]
+        positive_ix = tf.cast(tf.where(target_class_ids > 0)[:, 0], tf.int32)
         positive_class_ids = tf.cast(
-            tf.gather(target_class_ids, positive_ix), tf.int64)
+            tf.gather(target_class_ids, positive_ix), tf.int32)
         indices = tf.stack([positive_ix, positive_class_ids], axis=1)
 
         # Gather the masks (predicted and true) that contribute to loss
@@ -183,17 +183,6 @@ class MrcnnMaskLossGraph(KL.Layer):
         # shape: [batch, roi, num_classes]
         loss = tf.cond(tf.size(y_true) > 0,
                        lambda: K.losses.binary_crossentropy(y_true, y_pred),
-                       lambda: tf.constant(0.0))
+                       lambda: tf.constant(0.0, dtype=tf.float16))
         loss = tf.reduce_mean(loss)
         return loss
-
-
-class MetaClassLoss(KL.Layer):
-    def call(self, attention_score, *args, **kwargs):
-        """
-        Args:
-            attentions_score (_type_): [num_classes, num_classes]
-        """
-        prn_class_ids = tf.range(tf.shape(attention_score)[0])
-        meta_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels= prn_class_ids, logits=attention_score))
-        return meta_loss
