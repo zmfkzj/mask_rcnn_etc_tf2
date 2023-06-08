@@ -221,9 +221,12 @@ class Dataset:
         coco_eval.params.imgIds = list(param_image_ids)
         coco_eval.evaluate()
         coco_eval.accumulate()
-        mAP = coco_eval.get_map(iou_threshold)
+        mAPs = []
+        for thresh in iou_threshold:
+            mAP = coco_eval.get_map(thresh)
+            mAPs.append(mAP)
         eval_imgs = coco_eval.evalImgs
-        return mAP, eval_imgs
+        return mAPs, eval_imgs
 
     
     def get_loader_class_id(self, cat_name:str):

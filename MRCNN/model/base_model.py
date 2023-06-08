@@ -162,12 +162,7 @@ class BaseModel(KM.Model):
 
     def get_metrics(self, eval_type='bbox', iou_thresh=0.5):
         if self.detection_results:
-            mAP, _ = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=None, eval_type=eval_type)
-            mAP50, _ = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=0.5, eval_type=eval_type)
-            mAP75, _ = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=0.75, eval_type=eval_type)
-            mAP85, evalImgs = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=0.85, eval_type=eval_type)
-            results = [mAP, mAP50, mAP75, mAP85]
-
+            results, evalImgs = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=[None,0.5,0.75,0.85], eval_type=eval_type)
 
             true = []
             pred = []
@@ -197,17 +192,17 @@ class BaseModel(KM.Model):
             metrics = []
             for conf_thresh in np.arange(0.1,1,0.1):
                 conf_thresh = np.around(conf_thresh,1)
-                metrics.append(F1Score(num_classes=len(self.active_class_ids), average='macro',threshold=conf_thresh))
+                metrics.append(F1Score(num_classes=len(self.dataset.categories), average='macro',threshold=conf_thresh))
             for  metric_fn in metrics:
                 if true:
                     metric_fn.reset_state()
                     metric_fn.update_state(true, pred, sample_weight)
-                    results.append(metric_fn.result())
+                    results.append(tf.cast(metric_fn.result(), tf.float16))
                 else:
                     results.append(0.)
             
         else:
-            results = [0.]*12
+            results = [0.]*13
 
         return results # [mAP, mAP50, mAP75, mAP85, F1_0.1, F1_0.2, F1_0.3, F1_0.4, F1_0.5, F1_0.6, F1_0.7, F1_0.8, F1_0.9]
 

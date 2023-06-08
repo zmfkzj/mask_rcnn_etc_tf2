@@ -446,7 +446,6 @@ def get_augmentor(config: Config):
 def _augmentor(img, box, masks, classes, transforms):
     img = img.numpy().round().astype(np.uint8)
     box = box.numpy()[:,[1,0,3,2]]
-    # mask = np.expand_dims(mask.numpy().astype(np.uint8), -1).repeat(3, -1)
     masks = [m for m in masks.numpy().astype(np.uint8)]
     classes = classes.numpy()
 
@@ -463,7 +462,10 @@ def _augmentor(img, box, masks, classes, transforms):
         t_box_with_label = np.zeros([0,5])
     t_box = t_box_with_label[:,:4]
     t_classes = t_box_with_label[:,4]
-    t_masks = np.stack(t['masks']).astype(np.bool_)
+    if t['masks']:
+        t_masks = np.stack(t['masks']).astype(np.bool_)
+    else:
+        t_masks = np.zeros([0, *t_img.shape[:2]])
     
     t_box = t_box[:, [1,0,3,2]]
 

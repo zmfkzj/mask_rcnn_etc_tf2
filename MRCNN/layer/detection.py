@@ -105,6 +105,7 @@ class DetectionLayer(KL.Layer):
                                 mode='CONSTANT', constant_values=-1)
             # Set shape so map_fn() can infer result shape
             class_keep.set_shape([self.config.DETECTION_MAX_INSTANCES])
+            class_keep = tf.cast(class_keep, tf.int16)
             return class_keep
 
         # 2. Map over class IDs
@@ -115,8 +116,8 @@ class DetectionLayer(KL.Layer):
         nms_keep = tf.reshape(nms_keep, [-1])
         nms_keep = tf.gather(nms_keep, tf.where(nms_keep > -1)[:, 0])
         # 4. Compute intersection between keep and nms_keep
-        keep = tf.sets.intersection(tf.expand_dims(keep, 0),
-                                        tf.expand_dims(nms_keep, 0))
+        keep = tf.sets.intersection(tf.expand_dims(keep, 0), 
+                                    tf.cast(tf.expand_dims(nms_keep, 0), tf.int64))
         keep = tf.sparse.to_dense(keep)[0]
         # Keep top detections
         roi_count = self.config.DETECTION_MAX_INSTANCES

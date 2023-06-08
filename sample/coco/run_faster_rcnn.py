@@ -21,6 +21,8 @@ config = Config(GPUS=0,
                 LEARNING_RATE=0.0001,
                 TRAIN_IMAGES_PER_GPU=5,
                 TEST_IMAGES_PER_GPU=10,
+                STEPS_PER_EPOCH=1,
+                VALIDATION_STEPS=10
                 )
 
 

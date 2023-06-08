@@ -97,9 +97,6 @@ class MrcnnClassLossGraph(KL.Layer):
         target_class_ids: [batch, num_rois]. Integer class IDs. Uses zero
             padding to fill in the array.
         pred_class_logits: [batch, num_rois, num_classes]
-        active_class_ids: [batch, num_classes]. Has a value of 1 for
-            classes that are in the dataset of the image, and 0
-            for classes that are not in the dataset.
         """
         # During model building, Keras calls this function with
         # target_class_ids of type float32. Unclear why. Cast it

@@ -38,7 +38,6 @@ class Neck(KM.Model):
         # Top-down Layers
         # TODO: add assert to varify feature map sizes match what's in config
         P5 = self.fpn_c5p5(C5)
-        tf.print(tf.shape(P5))
 
         P4 = KL.Add(name="fpn_p4add")([ KL.UpSampling2D(size=(2, 2), name="fpn_p5upsampled")(P5),
                                         self.fpn_c4p4(C4)])

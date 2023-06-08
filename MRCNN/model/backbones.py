@@ -39,6 +39,7 @@ def build_keras_backbone(model_name:str):
             output_layers.append(l.input)
     
     output_layers.append(model.output)
+    output_layers = sorted([s.deref() for s in set([o.ref() for o in output_layers])], key=lambda x: x.shape[-1])
     outputs = output_layers[-4:]
 
     return tf.keras.Model(inputs=model.input, outputs=outputs, name='backbone')
