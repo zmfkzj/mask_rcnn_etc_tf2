@@ -12,9 +12,10 @@ class SmoothL1Loss(KL.Layer):
         y_true and y_pred are typically: [N, 4], but could be any shape.
         """
 
-        diff = tf.abs(tf.cast(y_true,tf.float16) - y_pred)
-        less_than_one = tf.cast(tf.less(diff, 1.0), tf.float16)
+        diff = tf.cast(tf.abs(y_true - y_pred), tf.float32)
+        less_than_one = tf.cast(tf.less(diff, 1.0), tf.float32)
         loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
+        loss = tf.cast(loss, tf.float16)
         return loss
 
 

@@ -1,7 +1,10 @@
 import datetime
 import numpy as np
 import tensorflow as tf
+import logging
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.get_logger().setLevel(logging.ERROR)
 
 from MRCNN.config import Config
 from MRCNN.data.frcnn_data_loader import *
@@ -11,20 +14,19 @@ from MRCNN.enums import TrainLayers, Mode
 import sys
 sys.setrecursionlimit(10**6)
 
-# tf.config.run_functions_eagerly(True)
-
-policy = tf.keras.mixed_precision.Policy('mixed_float16')
-tf.keras.mixed_precision.set_global_policy(policy)
 
 
 config = Config(GPUS=0,
                 LEARNING_RATE=0.0001,
-                TRAIN_IMAGES_PER_GPU=5,
+                TRAIN_IMAGES_PER_GPU=10,
                 TEST_IMAGES_PER_GPU=10,
-                STEPS_PER_EPOCH=1,
-                VALIDATION_STEPS=10
+                # STEPS_PER_EPOCH=1,
+                # VALIDATION_STEPS=10
                 )
 
+if config.FP16:
+    policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    tf.keras.mixed_precision.set_global_policy(policy)
 
 now = datetime.datetime.now().isoformat()
 train_dataset = Dataset.from_json('/home/jovyan/dataset/coco/annotations/instances_train2017.json', 
@@ -42,19 +44,20 @@ with config.STRATEGY.scope():
 train_loader = make_train_dataloader(train_dataset, config)
 val_loader = make_test_dataloader(val_dataset, config)
 
-callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best.h5',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
+callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
             tf.keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fpn_p'),
-            tf.keras.callbacks.ReduceLROnPlateau(),
-            tf.keras.callbacks.EarlyStopping('val_mAP50',patience=10,verbose=1, mode='max',restore_best_weights=True)]
+            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_mAP85', mode='max'),
+            tf.keras.callbacks.EarlyStopping('val_mAP85',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
 
 ###########################
 # FPN+ train
 ###########################
-model.set_trainable(TrainLayers.FPN_P)
+model.set_trainable(TrainLayers.HEADS)
 
 with config.STRATEGY.scope():
-    optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, amsgrad=True)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, amsgrad=True, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
+    # optimizer = tf.keras.optimizers.SGD(learning_rate=config.LEARNING_RATE, momentum=config.LEARNING_MOMENTUM, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(optimizer=optimizer)
 
 
@@ -72,7 +75,8 @@ model.fit(train_loader,
 model.set_trainable(TrainLayers.ALL)
 
 with config.STRATEGY.scope():
-    optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, amsgrad=True)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE/10, amsgrad=True, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
+    # optimizer = tf.keras.optimizers.SGD(learning_rate=config.LEARNING_RATE/10, momentum=config.LEARNING_MOMENTUM, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
     model.compile(optimizer=optimizer)
 
 

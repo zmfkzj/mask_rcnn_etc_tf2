@@ -59,6 +59,7 @@ class BaseModel(KM.Model):
         self.param_image_ids = set()
     
 
+    @tf.function
     def call(self, input_image, training=None):
         backbone_output = self.backbone(input_image)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
@@ -145,8 +146,6 @@ class BaseModel(KM.Model):
                 self.set_trainable(train_layers, keras_model=layer, indent=indent + 4)
                 continue
 
-            if not layer.weights:
-                continue
             # Is it trainable?
             trainable = bool(re.fullmatch(layer_regex, layer.name))
             # Update layer. If layer is a container, update inner layer.

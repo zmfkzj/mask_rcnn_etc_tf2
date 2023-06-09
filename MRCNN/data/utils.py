@@ -56,8 +56,6 @@ def padding_ann_ids(ann_ids, max_gt_instances):
 def load_image(path):
     img_raw = tf.io.read_file(path)
     image = tf.io.decode_image(img_raw,3)
-    if tf.size(image) == 0:
-        tf.print(f"image({path}) size is zero")
     return image
 
 
@@ -159,8 +157,7 @@ def minimize_mask(bbox, mask, mini_shape):
 
         m = m[y1:y2, x1:x2]
         if tf.size(m) == 0:
-            tf.print("mask size is zero")
-            tf.errors.INVALID_ARGUMENT
+            m = tf.zeros(mini_shape, tf.bool)
 
         # Resize with bilinear interpolation
         m = tf.expand_dims(m,2)
@@ -181,6 +178,9 @@ def annToRLE(ann, height, width):
     """
     segm = ann['segmentation']
     if isinstance(segm, list):
+        if not segm:
+            segm = [[0.,0.,0.,0.,0.,0.]]
+
         # polygon -- a single object might consist of multiple parts
         # we merge all parts into one mask rle code
         rles = maskUtils.frPyObjects(segm, height, width)

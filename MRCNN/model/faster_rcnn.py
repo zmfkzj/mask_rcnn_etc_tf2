@@ -92,9 +92,7 @@ class FasterRcnn(BaseModel):
     
     @tf.function
     def forward_predict_test(self, rpn_rois, mrcnn_feature_maps, input_window):
-        _rpn_rois = KL.Lambda(lambda r: 
-                          tf.cast(tf.vectorized_map(lambda x: 
-                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rpn_rois)
+        _rpn_rois = tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
         roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, _rpn_rois)
 
         # Network Heads

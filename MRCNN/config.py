@@ -170,6 +170,8 @@ class Config:
     
     IMAGE_SHAPE:np.ndarray = np.array([1024, 1024, 3])
 
+    FP16:bool = True
+
     def __post_init__(self):
         """Set values of computed attributes."""
         # Effective batch size
