@@ -1,4 +1,3 @@
-from typing import Callable
 import keras.api._v2.keras as keras
 import keras.api._v2.keras.layers as KL
 import tensorflow as tf
@@ -6,14 +5,11 @@ import tensorflow_models as tfm
 
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.enums import EvalType, Mode
-from MRCNN.loss import (MrcnnBboxLossGraph, MrcnnClassLossGraph,
-                        RpnBboxLossGraph, RpnClassLossGraph)
 from MRCNN.model.base_model import BaseModel
 
 from ..layer import DetectionLayer, FrcnnTarget
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
-from . import RPN, FPN_classifier, Neck
+from . import FPN_classifier
 
 
 class FasterRcnn(BaseModel):

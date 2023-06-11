@@ -106,7 +106,7 @@ class MrcnnClassLossGraph(KL.Layer):
         # During model building, Keras calls this function with
         # target_class_ids of type float32. Unclear why. Cast it
         # to int to get around it.
-        target_class_ids = tf.cast(target_class_ids, 'int64')
+        target_class_ids = tf.cast(target_class_ids, tf.int32)
 
         # Loss
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
