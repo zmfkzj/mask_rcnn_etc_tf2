@@ -24,9 +24,8 @@ config = Config(GPUS=0,
                 # VALIDATION_STEPS=10
                 )
 
-if config.FP16:
-    policy = tf.keras.mixed_precision.Policy('mixed_float16')
-    tf.keras.mixed_precision.set_global_policy(policy)
+policy = tf.keras.mixed_precision.Policy('mixed_float16')
+tf.keras.mixed_precision.set_global_policy(policy)
 
 now = datetime.datetime.now().isoformat()
 train_dataset = Dataset.from_json('/home/jovyan/dataset/coco/annotations/instances_train2017.json', 
@@ -41,18 +40,17 @@ with config.STRATEGY.scope():
     model = FasterRcnn(config, train_dataset)
 
 
-train_loader = make_train_dataloader(train_dataset, config)
+###########################
+# Head train
+###########################
+train_loader = make_train_dataloader(train_dataset, config, 40)
 val_loader = make_test_dataloader(val_dataset, config)
 
-callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fpn_p/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
-            tf.keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fpn_p'),
+callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/head/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
+            tf.keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/head'),
             tf.keras.callbacks.ReduceLROnPlateau(monitor='val_mAP85', mode='max'),
             tf.keras.callbacks.EarlyStopping('val_mAP85',patience=10,verbose=1, mode='max',restore_best_weights=True)]
 
-
-###########################
-# FPN+ train
-###########################
 model.set_trainable(TrainLayers.HEADS)
 
 with config.STRATEGY.scope():
@@ -72,6 +70,14 @@ model.fit(train_loader,
 ###########################
 # finetune
 ###########################
+train_loader = make_train_dataloader(train_dataset, config)
+val_loader = make_test_dataloader(val_dataset, config)
+
+callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{now}/chpt/fingtune/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
+            tf.keras.callbacks.TensorBoard(log_dir=f'save_{now}/logs/fingtune'),
+            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_mAP85', mode='max'),
+            tf.keras.callbacks.EarlyStopping('val_mAP85',patience=10,verbose=1, mode='max',restore_best_weights=True)]
+
 model.set_trainable(TrainLayers.ALL)
 
 with config.STRATEGY.scope():

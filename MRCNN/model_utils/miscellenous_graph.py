@@ -15,14 +15,18 @@ def trim_zeros_graph(boxes, name='trim_zeros'):
 
 
 class BatchPackGraph(KL.Layer):
+    @tf.function
     def call(self, x, counts, num_rows):
         """Picks different number of values from each row
         in x depending on the values in counts.
         """
-        outputs = tf.zeros([0,4],tf.float16)
+        outputs = tf.zeros([tf.reduce_sum(counts),4],tf.float16)
+        start = 0
         for i in tf.range(num_rows):
-            tf.autograph.experimental.set_loop_options(shape_invariants=[(outputs, tf.TensorShape([None,4]))])
-            outputs = tf.concat([outputs, x[i, :counts[i]]], axis=0)
+            stop = start + counts[i]
+            indices = tf.reshape(tf.range(start, stop), [-1,1])
+            outputs = tf.tensor_scatter_nd_update(outputs, indices, x[i, :counts[i]])
+            start = stop
         return outputs
         # outputs = []
         # counts = tf.cast(counts, tf.int32)
@@ -32,6 +36,7 @@ class BatchPackGraph(KL.Layer):
 
 
 class NormBoxesGraph(KL.Layer):
+    @tf.function
     def call(self, boxes, shape):
         """Converts boxes from pixel coordinates to normalized coordinates.
         boxes: [..., (y1, x1, y2, x2)] in pixel coordinates
@@ -51,6 +56,7 @@ class NormBoxesGraph(KL.Layer):
 
 
 class DenormBoxesGraph(KL.Layer):
+    @tf.function
     def call(self,boxes, shape):
         """Converts boxes from normalized coordinates to pixel coordinates.
         boxes: [..., (y1, x1, y2, x2)] in normalized coordinates

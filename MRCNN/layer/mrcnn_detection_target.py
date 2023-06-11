@@ -13,6 +13,7 @@ class Detectiontargets(KL.Layer):
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
         self.config = config
 
+    @tf.function
     def call(self, proposals, gt_class_ids, gt_boxes, gt_masks):
         """Generates detection targets for one image. Subsamples proposals and
         generates target class IDs, bounding box deltas, and masks for each.
@@ -185,6 +186,7 @@ class DetectionTargetLayer(KL.Layer):
         self.config = config
         self.detection_targets_graph = Detectiontargets(config)
 
+    @tf.function
     def call(self, inputs):
         proposals = inputs[0]
         gt_class_ids = inputs[1]

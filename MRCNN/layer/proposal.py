@@ -67,6 +67,7 @@ class ProposalLayer(KL.Layer):
         self.config = config
         self.nms_threshold = nms_threshold
 
+    @tf.function
     def call(self, inputs):
         # Box Scores. Use the foreground class confidence. [Batch, num_rois, 1]
         scores = inputs[0][:, :, 1]

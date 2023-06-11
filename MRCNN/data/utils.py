@@ -123,7 +123,6 @@ def load_ann(dataset: Dataset, ann, image_shape):
     y1, x1, y2, x2 = np.round(box)
     area = (y2-y1)*(x2-x1)
     if area == 0:
-        print(f'area of {ann["bbox"]} is 0')
         return None
 
     h = image_shape[0]
@@ -167,7 +166,7 @@ def minimize_mask(bbox, mask, mini_shape):
         m = tf.cast(m, tf.bool)
         return m
     
-    mini_mask = tf.map_fn(f, [mask,bbox],fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool))
+    mini_mask = tf.map_fn(f, [mask,bbox],fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool), )
     return mini_mask
 
 
@@ -246,12 +245,11 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
     """
     # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_match = tf.zeros([anchors.shape[0]], dtype=tf.int32)
+    rpn_bbox = tf.zeros([rpn_train_anchors_per_image,4], dtype=tf.float16)
     # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
-    rpn_bbox = tf.TensorArray(tf.float16, size=rpn_train_anchors_per_image)
     anchors = tf.cast(anchors, tf.float16)
 
     if tf.shape(gt_boxes)[0] == 0:
-        rpn_bbox = tf.zeros([rpn_train_anchors_per_image,4], dtype=tf.float16)
         return rpn_match, rpn_bbox
 
     # Handle COCO crowds
@@ -267,7 +265,8 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
         # Compute overlaps with crowd boxes [anchors, crowds]
         # crowd_overlaps = compute_overlaps(self.anchors, crowd_boxes)
         crowd_boxes = tf.ensure_shape(crowd_boxes,[None,4])
-        crowd_overlaps = tfm.vision.iou_similarity.iou(anchors, crowd_boxes)
+        crowd_overlaps = tfm.vision.iou_similarity.iou(tf.cast(anchors, tf.float32), tf.cast(crowd_boxes, tf.float32))
+        crowd_overlaps = tf.cast(crowd_overlaps, tf.float16)
         crowd_iou_max = tf.cast(tf.reduce_max(crowd_overlaps, axis=1),tf.float16)
         no_crowd_bool = (crowd_iou_max < 0.001)
     else:
@@ -277,7 +276,8 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
     # Compute overlaps [num_anchors, num_gt_boxes]
     # overlaps = compute_overlaps(anchors, gt_boxes)
     gt_boxes = tf.ensure_shape(gt_boxes,[None,4])
-    overlaps = tfm.vision.iou_similarity.iou(anchors, gt_boxes)
+    overlaps = tfm.vision.iou_similarity.iou(tf.cast(anchors, tf.float32), tf.cast(gt_boxes, tf.float32))
+    overlaps = tf.cast(overlaps, tf.float16)
 
     # Match anchors to GT Boxes
     # If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
@@ -347,13 +347,14 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
         a_center_x = gathered_anchores[i][1] + 0.5 * a_w
 
         # Compute the bbox refinement that the RPN should predict.
-        rpn_bbox = rpn_bbox.write(i, tf.stack([(gt_center_y - a_center_y) / a_h, 
-                                                    (gt_center_x - a_center_x) / a_w,
-                                                    tf.math.log(gt_h / a_h), 
-                                                    tf.math.log(gt_w / a_w),
-                                                    ])/rpn_bbox_std_dev)
-    rpn_bbox = rpn_bbox.stack()
-
+        _rpn_bbox = tf.stack([(gt_center_y - a_center_y) / a_h, 
+                              (gt_center_x - a_center_x) / a_w, 
+                              tf.math.log(gt_h / a_h), 
+                              tf.math.log(gt_w / a_w)]) \
+                                /rpn_bbox_std_dev
+        
+        rpn_bbox = tf.tensor_scatter_nd_update(rpn_bbox, [[i]], [_rpn_bbox])
+    
     return rpn_match, rpn_bbox
 
 

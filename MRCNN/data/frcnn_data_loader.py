@@ -44,8 +44,8 @@ def make_predict_dataloader(image_pathes:str|list[str], config: Config):
     return data_loader
 
 
-def make_test_dataloader(dataset: Dataset, config: Config):
-    batch_size = config.TEST_BATCH_SIZE
+def make_test_dataloader(dataset: Dataset, config: Config, batch_size=None):
+    batch_size = batch_size or config.TEST_BATCH_SIZE
 
     pathes = tf.data.Dataset\
         .from_tensor_slices([img.path for img in dataset.images])
@@ -67,8 +67,8 @@ def make_test_dataloader(dataset: Dataset, config: Config):
     return data_loader
 
 
-def make_train_dataloader(dataset:Dataset, config: Config):
-    batch_size = config.TRAIN_BATCH_SIZE
+def make_train_dataloader(dataset:Dataset, config: Config, batch_size=None):
+    batch_size = batch_size or config.TRAIN_BATCH_SIZE
 
     anchors = get_anchors(config)
 

@@ -14,6 +14,7 @@ from MRCNN.data.dataset import Dataset
 from MRCNN.data.utils import get_anchors
 from MRCNN.enums import TrainLayers
 from MRCNN.layer.proposal import ProposalLayer
+from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 from MRCNN.metric import F1Score
 from MRCNN.model.neck import Neck
 from MRCNN.model.rpn import RPN
@@ -53,6 +54,13 @@ class BaseModel(KM.Model):
         self.neck = Neck(config)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
+        #losses
+        self.rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")
+        self.rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")
+        self.class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")
+        self.bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")
+        self.mask_loss = MrcnnMaskLossGraph(name="mrcnn_bbox_loss")
+
         # for evaluation
         with no_automatic_dependency_tracking_scope(self):
             self.detection_results = []
@@ -60,8 +68,8 @@ class BaseModel(KM.Model):
     
 
     @tf.function
-    def call(self, input_image, training=None):
-        backbone_output = self.backbone(input_image)
+    def call(self, input_image, training=False):
+        backbone_output = self.backbone(input_image, training=training)
         P2,P3,P4,P5,P6 = self.neck(*backbone_output)
         
         P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-5]+(256,))

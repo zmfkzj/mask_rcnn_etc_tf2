@@ -43,19 +43,21 @@ class FasterRcnn(BaseModel):
 
 
             # Losses
-            rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")( input_rpn_match, rpn_class_logits)
-            rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
-            class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")(target_class_ids, mrcnn_class_logits)
-            bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")(target_bbox, target_class_ids, mrcnn_bbox)
+            rpn_class_loss = self.rpn_class_loss( input_rpn_match, rpn_class_logits)
+            rpn_bbox_loss = self.rpn_bbox_loss(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+            class_loss = self.class_loss(target_class_ids, mrcnn_class_logits)
+            bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox)
 
             reg_losses = tf.add_n([tf.cast(keras.regularizers.l2(self.config.WEIGHT_DECAY)(w), tf.float16) / tf.cast(tf.size(w), tf.float16)
                             for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
-            losses = [reg_losses, 
-                    rpn_class_loss    * self.config.LOSS_WEIGHTS['rpn_class_loss'], 
-                    rpn_bbox_loss     * self.config.LOSS_WEIGHTS['rpn_bbox_loss'], 
-                    class_loss        * self.config.LOSS_WEIGHTS['mrcnn_class_loss'], 
-                    bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']]
+            losses = [
+                reg_losses, 
+                rpn_class_loss    * self.config.LOSS_WEIGHTS['rpn_class_loss'], 
+                rpn_bbox_loss     * self.config.LOSS_WEIGHTS['rpn_bbox_loss'], 
+                class_loss        * self.config.LOSS_WEIGHTS['mrcnn_class_loss'], 
+                bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']
+                ]
             losses = [loss / self.config.GPU_COUNT for loss in losses]
             scaled_losses = [self.optimizer.get_scaled_loss(loss) for loss in losses]
 

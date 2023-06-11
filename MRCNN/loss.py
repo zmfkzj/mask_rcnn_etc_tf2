@@ -7,6 +7,7 @@ import tensorflow_addons as tfa
 from MRCNN.model_utils.miscellenous_graph import BatchPackGraph
 
 class SmoothL1Loss(KL.Layer):
+    @tf.function
     def call(self, y_true, y_pred):
         """Implements Smooth-L1 loss.
         y_true and y_pred are typically: [N, 4], but could be any shape.
@@ -25,6 +26,7 @@ class RpnClassLossGraph(KL.Layer):
     #     self.focal_loss = tf.losses.BinaryFocalCrossentropy(apply_class_balancing=True, from_logits=True, reduction=tf.losses.Reduction.NONE)
 
 
+    @tf.function
     def call(self, rpn_match, rpn_class_logits):
         """RPN anchor classifier loss.
 
@@ -57,6 +59,7 @@ class RpnBboxLossGraph(KL.Layer):
         self.smooth_l1 = SmoothL1Loss()
 
 
+    @tf.function
     def call(self, target_bbox, rpn_match, rpn_bbox, batch_size):
         """Return the RPN bounding box loss graph.
 
@@ -92,6 +95,7 @@ class MrcnnClassLossGraph(KL.Layer):
     #     self.focal_loss = tf.losses.BinaryFocalCrossentropy(apply_class_balancing=True, from_logits=True, reduction=tf.losses.Reduction.NONE)
 
 
+    @tf.function
     def call(self, target_class_ids, pred_class_logits):
         """Loss for the classifier head of Mask RCNN.
 
@@ -115,6 +119,7 @@ class MrcnnClassLossGraph(KL.Layer):
 
 
 class MrcnnBboxLossGraph(KL.Layer):
+    @tf.function
     def call(self, target_bbox, target_class_ids, pred_bbox):
         """Loss for Mask R-CNN bounding box refinement.
 
@@ -147,6 +152,7 @@ class MrcnnBboxLossGraph(KL.Layer):
 
 
 class MrcnnMaskLossGraph(KL.Layer):
+    @tf.function
     def call(self, target_masks, target_class_ids, pred_masks):
         """Mask binary cross-entropy loss for the masks head.
 

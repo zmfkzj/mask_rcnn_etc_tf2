@@ -33,6 +33,7 @@ class Neck(KM.Model):
         self.fpn_p5_bn = KL.BatchNormalization(name='fpn_p5_bn')
     
 
+    @tf.function
     def call(self, C2, C3, C4, C5):
 
         # Top-down Layers

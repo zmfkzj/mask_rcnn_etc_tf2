@@ -22,6 +22,7 @@ class RPN(KM.Model):
         self.rpn_bbox_pred = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid", activation='linear', name='rpn_bbox_pred')
 
 
+    @tf.function
     def call(self, feature_map):
         """Builds the computation graph of Region Proposal Network.
 

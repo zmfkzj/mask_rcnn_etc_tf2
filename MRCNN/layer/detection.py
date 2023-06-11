@@ -22,6 +22,7 @@ class DetectionLayer(KL.Layer):
         super(DetectionLayer, self).__init__(**kwargs)
         self.config = config
 
+    @tf.function
     def call(self, rois, mrcnn_class, mrcnn_bbox, image_shape, window ):
         batch_size = tf.shape(rois)[0]
         # Get windows of images in normalized coordinates. Windows are the area

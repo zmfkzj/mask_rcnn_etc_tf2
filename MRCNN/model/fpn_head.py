@@ -26,6 +26,7 @@ class FPN_classifier(KM.Model):
         self.shared = KL.Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2), name="pool_squeeze")
         self.mrcnn_bbox = KL.Lambda(lambda t: tf.reshape(t,(tf.shape(t)[0], tf.shape(t)[1], self.num_classes, 4)),name="mrcnn_bbox")
 
+    @tf.function
     def call(self, pooled_rois, training=True):
         """Builds the computation graph of the feature pyramid network classifier
         and regressor heads.
@@ -90,6 +91,7 @@ class FPN_mask(KM.Model):
         self.timedist_convT = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"), name="mrcnn_mask_deconv")
         self.timedist_conv_5 = KL.TimeDistributed(KL.Conv2D(self.num_classes, (1, 1), strides=1, activation="sigmoid"), name="mrcnn_mask")
 
+    @tf.function
     def call(self, pooled_rois, training=True):
         """Builds the computation graph of the mask head of Feature Pyramid Network.
 

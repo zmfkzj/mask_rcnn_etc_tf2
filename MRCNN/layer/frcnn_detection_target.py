@@ -13,6 +13,7 @@ class Detectiontargets(KL.Layer):
         super().__init__(trainable, name, dtype, dynamic, **kwargs)
         self.config = config
 
+    @tf.function
     def call(self, proposals, gt_class_ids, gt_boxes):
         """Generates detection targets for one image. Subsamples proposals and
         generates target class IDs, bounding box deltas, and masks for each.
@@ -58,10 +59,12 @@ class Detectiontargets(KL.Layer):
         gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
 
         # Compute overlaps matrix [proposals, gt_boxes]
-        overlaps = tfm.vision.iou_similarity.iou(proposals, gt_boxes)
+        overlaps = tfm.vision.iou_similarity.iou(tf.cast(proposals, tf.float32), tf.cast(gt_boxes, tf.float32))
+        overlaps = tf.cast(overlaps, tf.float16)
 
         # Compute overlaps with crowd boxes [proposals, crowd_boxes]
-        crowd_overlaps = tfm.vision.iou_similarity.iou(proposals, crowd_boxes)
+        crowd_overlaps = tfm.vision.iou_similarity.iou(tf.cast(proposals, tf.float32), tf.cast(crowd_boxes, tf.float32))
+        crowd_overlaps = tf.cast(crowd_overlaps, tf.float16)
         crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
         no_crowd_bool = (crowd_iou_max < 0.001)
 
@@ -148,6 +151,7 @@ class DetectionTargetLayer(KL.Layer):
         self.config = config
         self.detection_targets_graph = Detectiontargets(config)
 
+    @tf.function
     def call(self, inputs):
         proposals = inputs[0]
         gt_class_ids = inputs[1]
