@@ -16,7 +16,6 @@ class SmoothL1Loss(KL.Layer):
         diff = tf.cast(tf.abs(y_true - y_pred), tf.float32)
         less_than_one = tf.cast(tf.less(diff, 1.0), tf.float32)
         loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
-        loss = tf.cast(loss, tf.float16)
         return loss
 
 
@@ -34,8 +33,8 @@ class RpnClassLossGraph(KL.Layer):
                 -1=negative, 0=neutral anchor.
         rpn_class_logits: [batch, anchors, 2]. RPN classifier logits for BG/FG.
         """
-        # Squeeze last dim to simplify
-        # rpn_match = tf.squeeze(rpn_match, -1)
+        rpn_class_logits = tf.cast(rpn_class_logits, tf.float32)
+
         # Get anchor classes. Convert the -1/+1 match to 0/1 values.
         anchor_class = tf.cast(tf.equal(rpn_match, 1), tf.int32)
         # Positive and Negative anchors contribute to the loss,
@@ -48,7 +47,7 @@ class RpnClassLossGraph(KL.Layer):
         loss = K.losses.sparse_categorical_crossentropy(anchor_class, rpn_class_logits, from_logits=True)
         # anchor_class = tf.one_hot(anchor_class,2)
         # loss = self.focal_loss(anchor_class, rpn_class_logits)
-        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0, dtype=tf.float16))
+        loss = tf.cond(tf.size(loss) > 0, lambda: tf.reduce_mean(loss), lambda: tf.constant(0.0, dtype=tf.float32))
         return loss
 
 
@@ -84,7 +83,7 @@ class RpnBboxLossGraph(KL.Layer):
 
         loss = self.smooth_l1(target_bbox, rpn_bbox)
         
-        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0, dtype=tf.float16))
+        loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:tf.constant(0.0, dtype=tf.float32))
         # loss = tf.cond(tf.size(loss) > 0, lambda:tf.reduce_mean(loss), lambda:np.nan)
         return loss
 
@@ -107,6 +106,7 @@ class MrcnnClassLossGraph(KL.Layer):
         # target_class_ids of type float32. Unclear why. Cast it
         # to int to get around it.
         target_class_ids = tf.cast(target_class_ids, tf.int32)
+        pred_class_logits = tf.cast(pred_class_logits, tf.float32)
 
         # Loss
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -146,7 +146,7 @@ class MrcnnBboxLossGraph(KL.Layer):
         # Smooth-L1 Loss
         loss = tf.cond(tf.size(target_bbox) > 0,
                        lambda: SmoothL1Loss()(y_true=target_bbox, y_pred=pred_bbox),
-                       lambda: tf.constant(0.0, dtype=tf.float16))
+                       lambda: tf.constant(0.0, dtype=tf.float32))
         loss = tf.reduce_mean(loss)
         return loss
 

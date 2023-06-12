@@ -3,7 +3,7 @@ import keras.api._v2.keras.layers as KL
 import keras.api._v2.keras.models as KM
 # from ..layer import PyramidROIAlign
 
-class FPN_classifier(KM.Model):
+class Classifier(KM.Model):
     def __init__(self, pool_size, num_classes, fc_layers_size=1024):
         super().__init__()
         self.pool_size = pool_size
@@ -70,7 +70,7 @@ class FPN_classifier(KM.Model):
         return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 
 
-class FPN_mask(KM.Model):
+class Segmentor(KM.Model):
     def __init__(self, num_classes):
         super().__init__()
         self.num_classes = num_classes

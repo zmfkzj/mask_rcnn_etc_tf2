@@ -16,9 +16,9 @@ from MRCNN.enums import TrainLayers
 from MRCNN.layer.proposal import ProposalLayer
 from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 from MRCNN.metric import F1Score
-from MRCNN.model.neck import Neck
-from MRCNN.model.rpn import RPN
-from MRCNN.model.backbones import backbones
+from ..layer import FPN
+from .rpn import RPN
+from .backbones import backbones
 
 from ..utils import compute_backbone_shapes, unmold_detections
 
@@ -51,15 +51,15 @@ class BaseModel(KM.Model):
         self.backbone = self.make_backbone_model(config)
         self.backbone_output_shapes = compute_backbone_shapes(config)
 
-        self.neck = Neck(config)
+        self.neck = FPN(config, self.backbone.output)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         #losses
-        self.rpn_class_loss = RpnClassLossGraph(name="rpn_class_loss")
-        self.rpn_bbox_loss = RpnBboxLossGraph(name="rpn_bbox_loss")
-        self.class_loss = MrcnnClassLossGraph(name="mrcnn_class_loss")
-        self.bbox_loss = MrcnnBboxLossGraph(name="mrcnn_bbox_loss")
-        self.mask_loss = MrcnnMaskLossGraph(name="mrcnn_bbox_loss")
+        self.rpn_class_loss = RpnClassLossGraph(name="loss_rpn_class")
+        self.rpn_bbox_loss = RpnBboxLossGraph(name="loss_rpn_bbox")
+        self.class_loss = MrcnnClassLossGraph(name="loss_mrcnn_class")
+        self.bbox_loss = MrcnnBboxLossGraph(name="loss_mrcnn_bbox")
+        self.mask_loss = MrcnnMaskLossGraph(name="loss_mrcnn_bbox")
 
         # for evaluation
         with no_automatic_dependency_tracking_scope(self):
@@ -70,15 +70,13 @@ class BaseModel(KM.Model):
     @tf.function
     def call(self, input_image, training=False):
         backbone_output = self.backbone(input_image, training=training)
-        P2,P3,P4,P5,P6 = self.neck(*backbone_output)
+        mrcnn_feature_maps = self.neck(backbone_output)
         
-        P2 = tf.ensure_shape(P2, (None,)+self.backbone_output_shapes[-5]+(256,))
-        P3 = tf.ensure_shape(P3, (None,)+self.backbone_output_shapes[-4]+(256,))
-        P4 = tf.ensure_shape(P4, (None,)+self.backbone_output_shapes[-3]+(256,))
-        P5 = tf.ensure_shape(P5, (None,)+self.backbone_output_shapes[-2]+(256,))
-
-        rpn_feature_maps = [P2, P3, P4, P5, P6]
-        mrcnn_feature_maps = {'2':P2, '3':P3, '4':P4, '5':P5}
+        rpn_feature_maps = [mrcnn_feature_maps['3'],
+                            mrcnn_feature_maps['4'],
+                            mrcnn_feature_maps['5'],
+                            mrcnn_feature_maps['6'],
+                            mrcnn_feature_maps['7']]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists

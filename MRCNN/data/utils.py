@@ -405,7 +405,7 @@ def preprocessing_train(path,
     if augmentor is not None:
         image, boxes, masks, loader_class_ids =  tf.py_function(augmentor, (image, boxes, masks, loader_class_ids), (tf.uint8, tf.float16, tf.bool, tf.int16))
 
-    resized_image, resized_boxes, resized_masks = resize(image, boxes, masks, resize_shape, mini_mask_shape)
+    resized_image, resized_boxes, minimized_masks = resize(image, boxes, masks, resize_shape, mini_mask_shape)
     
     norm_image = normalize(resized_image, pixel_mean, pixel_std)
 
@@ -425,7 +425,7 @@ def preprocessing_train(path,
 
     resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
     loader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(loader_class_ids, tf.squeeze(indices, -1)))
-    masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(resized_masks, tf.squeeze(indices,-1)))
+    masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimized_masks, tf.squeeze(indices,-1)))
 
     masks = tf.transpose(masks, [1,2,0])
 

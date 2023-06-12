@@ -12,7 +12,6 @@ from MRCNN.data.dataset import Dataset
 from MRCNN.model import FasterRcnn
 from MRCNN.enums import TrainLayers
 from MRCNN.model.backbones import backbones
-from MRCNN.data.cache_dataset import make_cache
 
 import sys
 sys.setrecursionlimit(10**6)
@@ -21,24 +20,24 @@ policy = tf.keras.mixed_precision.Policy('mixed_float16')
 tf.keras.mixed_precision.set_global_policy(policy)
 
 
-config = Config(GPUS=0,
-                LEARNING_RATE=0.0001,
-                TRAIN_IMAGES_PER_GPU=3,
-                TEST_IMAGES_PER_GPU=10,
-                BACKBONE=b,
-                STEPS_PER_EPOCH=2000,
-                VALIDATION_STEPS=200
-                )
-
 now = datetime.datetime.now().isoformat()
 train_dataset = Dataset.from_json('/home/jovyan/dataset/detection_comp/train.json', 
                                 '/home/jovyan/dataset/detection_comp/train')
 val_dataset = Dataset.from_json('/home/jovyan/dataset/detection_comp/val.json', 
                                 '/home/jovyan/dataset/detection_comp/train')
 
-make_cache(config, train_dataset)
 
 for b in backbones:
+    config = Config(GPUS=0,
+                    LEARNING_RATE=0.00000001,
+                    TRAIN_IMAGES_PER_GPU=8,
+                    TEST_IMAGES_PER_GPU=10,
+                    BACKBONE=b,
+                    FPN='NASFPN',
+                    # FPN='FPN',
+                    STEPS_PER_EPOCH=1000,
+                    VALIDATION_STEPS=200
+                    )
 
     if not os.path.isdir(f'save_{b}_{now}/chpt'):
         os.makedirs(f'save_{b}_{now}/chpt')
@@ -54,7 +53,7 @@ for b in backbones:
     ###########################
     # Head train
     ###########################
-    train_loader = make_train_dataloader(train_dataset, config, 40)
+    train_loader = make_train_dataloader(train_dataset, config, 20)
     val_loader = make_test_dataloader(val_dataset, config)
 
     callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{b}_{now}/chpt/head/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),

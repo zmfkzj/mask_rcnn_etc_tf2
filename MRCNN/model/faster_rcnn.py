@@ -9,7 +9,7 @@ from MRCNN.model.base_model import BaseModel
 
 from ..layer import DetectionLayer, FrcnnTarget
 from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
-from . import FPN_classifier
+from . import Classifier
 
 
 class FasterRcnn(BaseModel):
@@ -24,7 +24,7 @@ class FasterRcnn(BaseModel):
         super().__init__(config, dataset, name=name)
 
         self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
-        self.fpn_classifier = FPN_classifier(config.POOL_SIZE, self.num_classes, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
+        self.classifier = Classifier(config.POOL_SIZE, self.num_classes, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
     
     def train_step(self, data):
@@ -44,7 +44,7 @@ class FasterRcnn(BaseModel):
             class_loss = self.class_loss(target_class_ids, mrcnn_class_logits)
             bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox)
 
-            reg_losses = tf.add_n([tf.cast(keras.regularizers.l2(self.config.WEIGHT_DECAY)(w), tf.float16) / tf.cast(tf.size(w), tf.float16)
+            reg_losses = tf.add_n([tf.cast(keras.regularizers.l2(self.config.WEIGHT_DECAY)(w), tf.float32) / tf.cast(tf.size(w), tf.float32)
                             for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
             
             losses = [
@@ -55,10 +55,8 @@ class FasterRcnn(BaseModel):
                 bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']
                 ]
             losses = [loss / self.config.GPU_COUNT for loss in losses]
-            scaled_losses = [self.optimizer.get_scaled_loss(loss) for loss in losses]
 
-        scaled_grad = tape.gradient(scaled_losses, self.trainable_variables)
-        grad = self.optimizer.get_unscaled_gradients(scaled_grad)
+        grad = tape.gradient(losses, self.trainable_variables)
         self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
 
         mean_loss = tf.reduce_mean(losses)
@@ -90,12 +88,18 @@ class FasterRcnn(BaseModel):
     
     @tf.function
     def forward_predict_test(self, rpn_rois, mrcnn_feature_maps, input_window):
+
+        ensure_shape_feature = {}
+        for l, fm in mrcnn_feature_maps.items():
+            shape = self.backbone_output_shapes[int(l)-3]
+            ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
+
         _rpn_rois = tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
-        roi_cls_feature = self.ROIAlign_classifier(mrcnn_feature_maps, _rpn_rois)
+        roi_cls_feature = self.ROIAlign_classifier(ensure_shape_feature, _rpn_rois)
 
         # Network Heads
         # Proposal classifier and BBox regressor heads
-        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_feature, training=False)
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.classifier(roi_cls_feature, training=False)
         detections = DetectionLayer(self.config, name="detection")(rpn_rois, mrcnn_class, mrcnn_bbox, self.config.IMAGE_SHAPE, input_window)
         return detections
 
@@ -103,6 +107,11 @@ class FasterRcnn(BaseModel):
 
     @tf.function
     def forward_train(self, rpn_rois, mrcnn_feature_maps, input_gt_class_ids, input_gt_boxes):
+
+        ensure_shape_feature = {}
+        for l, fm in mrcnn_feature_maps.items():
+            shape = self.backbone_output_shapes[int(l)-3]
+            ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         # Normalize coordinates
         gt_boxes = NormBoxesGraph()(input_gt_boxes, self.config.IMAGE_SHAPE[:2])
@@ -118,9 +127,9 @@ class FasterRcnn(BaseModel):
         _rois = KL.Lambda(lambda r: 
                           tf.cast(tf.vectorized_map(lambda x: 
                                                     DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rois)
-        roi_cls_features = self.ROIAlign_classifier(mrcnn_feature_maps, _rois)
+        roi_cls_features = self.ROIAlign_classifier(ensure_shape_feature, _rois)
 
         # Network Heads
         # TODO: verify that this handles zero padded ROIs
-        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.fpn_classifier(roi_cls_features)
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.classifier(roi_cls_features)
         return target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox
