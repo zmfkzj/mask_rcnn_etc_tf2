@@ -2,7 +2,7 @@ import unittest
 import tensorflow as tf
 
 from MRCNN.config import Config
-from MRCNN.model import FPN
+from MRCNN.layer import FPN
 from MRCNN.model.backbones import backbones
 from MRCNN.utils import compute_backbone_shapes
 
@@ -23,7 +23,7 @@ class TestModelFpn(unittest.TestCase):
         feats = fpn(endpoints)
 
 
-        for level in range(3, 7 + 1):
+        for level in range(2, 6 + 1):
           self.assertIn(str(level), feats)
           self.assertEqual(
               [2, input_size // 2**level, input_size // 2**level, config.TOP_DOWN_PYRAMID_SIZE],

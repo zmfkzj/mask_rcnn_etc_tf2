@@ -66,25 +66,23 @@ def normalize(image, pixel_mean, pixel_std):
 
 
 @tf.function
-def resize(image, bbox, mask, resize_shape, mini_mask_shape):
+def resize(image, bbox, masks, resize_shape):
     origin_shape = tf.shape(image)
-    resized_image, window = resize_image(image, resize_shape)
-    resized_bbox = resize_box(bbox, origin_shape, window)
-    masks = minimize_mask(bbox, mask, mini_mask_shape)
-    return resized_image, resized_bbox, masks
+    image, window = resize_image(image, resize_shape)
+    bbox = resize_box(bbox, origin_shape, window)
+
+    masks = tf.expand_dims(masks, -1)
+    masks = tf.cast(masks, tf.float16)
+    masks = tf.image.grayscale_to_rgb(masks)
+    masks, _ = resize_image(masks, resize_shape)
+    masks = tf.cast(tf.round(masks[...,0]), tf.bool)
+
+    return image, bbox, masks
 
 
 @tf.function
-def resize_image(image, shape):
+def resize_image(images, shape):
     """Resizes an image keeping the aspect ratio unchanged.
-
-    min_dim: if provided, resizes the image such that it's smaller
-        dimension == min_dim
-    max_dim: if provided, ensures that the image longest side doesn't
-        exceed this value.
-    min_scale: if provided, ensure that the image is scaled up by at least
-        this percent even if min_dim doesn't require it.
-
     Returns:
     image: the resized image
     window: (y1, x1, y2, x2). If max_dim is provided, padding might
@@ -94,24 +92,33 @@ def resize_image(image, shape):
     scale: The scale factor used to resize the image
     padding: Padding added to the image [(top, bottom), (left, right), (0, 0)]
     """
-    image = tf.ensure_shape(image, [None, None,3])
-    image = tf.image.resize(image, 
+    many_img = True
+    if tf.rank(images)==3:
+        images = tf.expand_dims(images, 0)
+        many_img = False
+    
+    images = tf.ensure_shape(images, [None, None, None,3])
+    images = tf.image.resize(images, 
                             shape[:2],
                             preserve_aspect_ratio=True, 
                             method=tf.image.ResizeMethod.BILINEAR)
 
     shape = tf.cast(shape, tf.int32)
     # Get new height and width
-    h = tf.shape(image)[0]
-    w = tf.shape(image)[1]
+    h = tf.shape(images)[1]
+    w = tf.shape(images)[2]
     top_pad = (shape[0] - h) // 2
     bottom_pad = shape[0] - h - top_pad
     left_pad = (shape[1] - w) // 2
     right_pad = shape[1] - w - left_pad
-    padding = tf.stack([(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
-    image = tf.pad(image, padding, mode='constant', constant_values=0)
+    padding = tf.stack([(0,0),(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
+    images = tf.pad(images, padding, mode='constant', constant_values=0)
     window = tf.stack((top_pad, left_pad, h + top_pad, w + left_pad))
-    return image, window
+
+    if not many_img:
+        images = tf.squeeze(images, 0)
+
+    return images, window
 
 
 def load_ann(dataset: Dataset, ann, image_shape):
@@ -157,6 +164,7 @@ def minimize_mask(bbox, mask, mini_shape):
         m = m[y1:y2, x1:x2]
         if tf.size(m) == 0:
             m = tf.zeros(mini_shape, tf.bool)
+            return m
 
         # Resize with bilinear interpolation
         m = tf.expand_dims(m,2)
@@ -271,7 +279,7 @@ def build_rpn_targets(gt_class_ids, gt_boxes, anchors,rpn_train_anchors_per_imag
         no_crowd_bool = (crowd_iou_max < 0.001)
     else:
         # All anchors don't intersect a crowd
-        no_crowd_bool = tf.ones([anchors.shape[0]], dtype=tf.bool)
+        no_crowd_bool = tf.ones([tf.shape(anchors)[0]], dtype=tf.bool)
     
     # Compute overlaps [num_anchors, num_gt_boxes]
     # overlaps = compute_overlaps(anchors, gt_boxes)
@@ -402,14 +410,17 @@ def preprocessing_train(path,
         tf.py_function(lambda ann_ids, h, w: load_gt(dataset, ann_ids, h, w), 
                        (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16, tf.bool))
 
+    image, boxes, masks = resize(image, boxes, masks, resize_shape)
+
     if augmentor is not None:
         image, boxes, masks, loader_class_ids =  tf.py_function(augmentor, (image, boxes, masks, loader_class_ids), (tf.uint8, tf.float16, tf.bool, tf.int16))
 
-    resized_image, resized_boxes, minimized_masks = resize(image, boxes, masks, resize_shape, mini_mask_shape)
-    
-    norm_image = normalize(resized_image, pixel_mean, pixel_std)
 
-    rpn_match, rpn_bbox = build_rpn_targets(loader_class_ids, resized_boxes, anchors,rpn_train_anchors_per_image,rpn_bbox_std_dev)
+    masks = minimize_mask(boxes, masks, mini_mask_shape)
+    
+    norm_image = normalize(image, pixel_mean, pixel_std)
+
+    rpn_match, rpn_bbox = build_rpn_targets(loader_class_ids, boxes, anchors,rpn_train_anchors_per_image,rpn_bbox_std_dev)
 
     pooled_box = tf.zeros([max_gt_instances,4],dtype=tf.float16)
     pooled_class_id = tf.zeros([max_gt_instances],dtype=tf.int16)
@@ -423,48 +434,62 @@ def preprocessing_train(path,
         indices = tf.range(instance_count)
         indices = tf.expand_dims(indices,1)
 
-    resized_boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(resized_boxes, tf.squeeze(indices,-1)))
+    boxes = tf.tensor_scatter_nd_update(pooled_box, indices, tf.gather(boxes, tf.squeeze(indices,-1)))
     loader_class_ids = tf.tensor_scatter_nd_update(pooled_class_id, indices, tf.gather(loader_class_ids, tf.squeeze(indices, -1)))
-    masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(minimized_masks, tf.squeeze(indices,-1)))
+    masks = tf.tensor_scatter_nd_update(pooled_mask, indices, tf.gather(masks, tf.squeeze(indices,-1)))
 
     masks = tf.transpose(masks, [1,2,0])
 
-    return norm_image, resized_boxes, loader_class_ids, rpn_match, rpn_bbox, masks
+    return norm_image, boxes, loader_class_ids, rpn_match, rpn_bbox, masks
 
 
 def get_augmentor(config: Config):
     augment_list = config.AUGMENTORS
+    if not augment_list:
+        return None
 
     transforms = []
     for a in augment_list:
-        transforms.append(getattr(A, a)(p=0.5))
+        try:
+            transforms.append(getattr(A, a)(p=config.AUG_PROB))
+        except ValueError as e:
+            print(a)
+    
+    transforms.append(A.Resize(*config.IMAGE_SHAPE[:2], interpolation=cv2.INTER_LINEAR))
+
+    transform = A.Compose(transforms,
+                    bbox_params=A.BboxParams(format='pascal_voc', min_visibility=0.1))
 
     augmentor = partial(_augmentor,
-                         transforms=transforms)
+                         transform=transform)
     return augmentor
     
     
-def _augmentor(img, box, masks, classes, transforms):
+def _augmentor(img, box, masks, classes, transform):
     img = img.numpy().round().astype(np.uint8)
     box = box.numpy()[:,[1,0,3,2]]
     masks = [m for m in masks.numpy().astype(np.uint8)]
     classes = classes.numpy()
+    idx = np.expand_dims(np.arange(classes.shape[0]),-1)
 
-    box_with_label = np.concatenate([box, np.expand_dims(classes, -1)], -1)
+    box_with_label = np.concatenate([box, np.expand_dims(classes, -1), idx], -1)
 
-
-    transform = A.Compose(transforms,
-                    bbox_params=A.BboxParams(format='pascal_voc', min_visibility=0.1))
-    
     t = transform(image=img,masks=masks,bboxes=box_with_label)
     t_img = t['image']
     t_box_with_label = np.array(t['bboxes'])
     if t_box_with_label.size == 0:
-        t_box_with_label = np.zeros([0,5])
+        t_box_with_label = np.zeros([0,6])
+
     t_box = t_box_with_label[:,:4]
     t_classes = t_box_with_label[:,4]
     if t['masks']:
         t_masks = np.stack(t['masks']).astype(np.bool_)
+
+        t_idx = t_box_with_label[:,5]
+        deleted_idx = list(set(idx.squeeze(-1).tolist()) - set(t_idx.tolist()))
+
+        t_masks = np.delete(t_masks, deleted_idx, axis=0)
+
     else:
         t_masks = np.zeros([0, *t_img.shape[:2]])
     

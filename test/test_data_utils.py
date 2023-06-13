@@ -1,12 +1,6 @@
 import unittest
-import cv2
 import tensorflow as tf
 from MRCNN.data.utils import *
-from MRCNN.enums import TrainLayers
-from MRCNN.loss import RpnBboxLossGraph, RpnClassLossGraph
-from MRCNN.model.faster_rcnn import FasterRcnn
-from MRCNN.utils import denorm_boxes
-from MRCNN.layer.proposal import apply_box_deltas_graph
 import sys
 sys.setrecursionlimit(10**6)
 
@@ -17,13 +11,17 @@ tf.keras.mixed_precision.set_global_policy(policy)
 class TestDataUtils(unittest.TestCase):
     def setUp(self) -> None:
         # self.json_path = 'test/source/instances_train_fix.json'
-        self.config = Config()
         # self.json_path = 'test/source/test.json'
-        self.json_path = '/home/min/4t/dataset/coco/annotations/instances_val2017.json'
+        # self.img_dir = 'test/source/images'
+        self.config = Config()
+        # self.json_path = '/home/min/4t/dataset/coco/annotations/instances_val2017.json'
+        # self.img_dir = '/home/min/4t/dataset/coco/val2017'
+        self.json_path = '/home/min/4t/dataset/detection_comp/train.json'
+        self.img_dir = '/home/min/4t/dataset/detection_comp/train'
 
 
     def test_load_ann(self):
-        dataset = Dataset.from_json(self.json_path,'test/source/images')
+        dataset = Dataset.from_json(self.json_path,self.img_dir)
         ann = dataset.annotations[0]
         image = load_image(ann.image.path).numpy()
 
@@ -32,7 +30,7 @@ class TestDataUtils(unittest.TestCase):
         print()
 
 
-    def test_box_matching(self):
+    def test_rpn_box_matching(self):
         dataset = Dataset.from_json(self.json_path,'/home/min/4t/dataset/coco/val2017/')
         resize_shape = self.config.IMAGE_SHAPE[:2].astype(np.int32)
         mini_mask_shape = self.config.MINI_MASK_SHAPE

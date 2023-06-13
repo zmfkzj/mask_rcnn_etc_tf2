@@ -14,13 +14,13 @@ class FPN(KL.Layer):
         if config.FPN == 'FPN':
             self.fpn = tfm.vision.decoders.FPN(input_specs=output_specs, 
                                                 num_filters=config.TOP_DOWN_PYRAMID_SIZE,
-                                                min_level=3,
-                                                max_level=7)
+                                                min_level=2,
+                                                max_level=6)
         elif config.FPN == 'NASFPN':
             self.fpn = tfm.vision.decoders.NASFPN(input_specs=output_specs,
                                                 num_filters=config.TOP_DOWN_PYRAMID_SIZE,
-                                                min_level=3,
-                                                max_level=7)
+                                                min_level=2,
+                                                max_level=6)
         else:
             raise ValueError('Invalid FPN')
     

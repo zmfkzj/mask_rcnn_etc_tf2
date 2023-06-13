@@ -70,13 +70,13 @@ class BaseModel(KM.Model):
     @tf.function
     def call(self, input_image, training=False):
         backbone_output = self.backbone(input_image, training=training)
-        mrcnn_feature_maps = self.neck(backbone_output)
+        mrcnn_feature_maps = self.neck(backbone_output, training=training)
         
-        rpn_feature_maps = [mrcnn_feature_maps['3'],
+        rpn_feature_maps = [mrcnn_feature_maps['2'],
+                            mrcnn_feature_maps['3'],
                             mrcnn_feature_maps['4'],
                             mrcnn_feature_maps['5'],
-                            mrcnn_feature_maps['6'],
-                            mrcnn_feature_maps['7']]
+                            mrcnn_feature_maps['6']]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
@@ -222,9 +222,9 @@ class BaseModel(KM.Model):
             mrcnn_mask (Tensor, optional): Tensor(shape=[batch_size, detection_max_instances, MASK_SHAPE[0], MASK_SHAPE[1], NUM_CLASSES]).
         """
         image_ids = image_ids.numpy()
-        detections = detections.numpy()
+        detections = detections.numpy().astype(np.float32)
         origin_image_shapes = origin_image_shapes.numpy()
-        window = window.numpy()
+        window = window.numpy().astype(np.float32)
         if mrcnn_mask is not None:
             mrcnn_mask = mrcnn_mask.numpy()
 

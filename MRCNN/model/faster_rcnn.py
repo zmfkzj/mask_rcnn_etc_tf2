@@ -33,7 +33,7 @@ class FasterRcnn(BaseModel):
 
         with tf.GradientTape() as tape:
 
-            rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images)
+            rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images, training=True)
             target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox = \
                 self.forward_train(rpn_rois, mrcnn_feature_maps, input_gt_class_ids, input_gt_boxes)
 
@@ -55,8 +55,10 @@ class FasterRcnn(BaseModel):
                 bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']
                 ]
             losses = [loss / self.config.GPU_COUNT for loss in losses]
+            # scaled_losses = [self.optimizer.get_scaled_loss(l) for l in losses]
 
         grad = tape.gradient(losses, self.trainable_variables)
+        # grad = self.optimizer.get_unscaled_gradients(scaled_grad)
         self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
 
         mean_loss = tf.reduce_mean(losses)
@@ -67,7 +69,7 @@ class FasterRcnn(BaseModel):
     def test_step(self, data):
         input_images, input_window, origin_image_shapes, image_ids = data
 
-        rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images)
+        rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images, training=False)
         detections = self.forward_predict_test(rpn_rois, mrcnn_feature_maps, input_window)
         tf.py_function(self.build_coco_results, (image_ids, 
                                                  detections, 
@@ -78,7 +80,7 @@ class FasterRcnn(BaseModel):
 
     def predict_step(self, data):
         input_images, input_window, origin_image_shapes, pathes = data
-        rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images)
+        rpn_rois, mrcnn_feature_maps, rpn_class_logits, rpn_bbox = self(input_images, training=False)
         detections = self.forward_predict_test(rpn_rois, mrcnn_feature_maps, input_window)
         tf.py_function(self.build_detection_results, (pathes, 
                                                       detections, 
@@ -91,7 +93,7 @@ class FasterRcnn(BaseModel):
 
         ensure_shape_feature = {}
         for l, fm in mrcnn_feature_maps.items():
-            shape = self.backbone_output_shapes[int(l)-3]
+            shape = self.backbone_output_shapes[int(l)-2]
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         _rpn_rois = tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
@@ -110,7 +112,7 @@ class FasterRcnn(BaseModel):
 
         ensure_shape_feature = {}
         for l, fm in mrcnn_feature_maps.items():
-            shape = self.backbone_output_shapes[int(l)-3]
+            shape = self.backbone_output_shapes[int(l)-2]
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         # Normalize coordinates
@@ -124,12 +126,11 @@ class FasterRcnn(BaseModel):
             FrcnnTarget(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes])
         
 
-        _rois = KL.Lambda(lambda r: 
-                          tf.cast(tf.vectorized_map(lambda x: 
-                                                    DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),r), tf.float16))(rois)
+        _rois =  tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rois), tf.float16)
         roi_cls_features = self.ROIAlign_classifier(ensure_shape_feature, _rois)
 
         # Network Heads
         # TODO: verify that this handles zero padded ROIs
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox = self.classifier(roi_cls_features)
+
         return target_class_ids, mrcnn_class_logits, target_bbox, mrcnn_bbox

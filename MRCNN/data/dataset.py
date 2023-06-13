@@ -78,7 +78,7 @@ class Dataset:
         self.__catId_loaderId_dict:dict[int,int] = {}
         self.__loaderId_catId_dict:dict[int,int] = {}
         self.__catId_catName_dict:dict[int,str] = {}
-        for i,cat in enumerate( self.categories ):
+        for i,cat in enumerate( sorted(self.categories, key=lambda x: x.id) ):
             self.__catId_loaderId_dict[cat.id] = i
             self.__loaderId_catId_dict[i] = cat.id
             self.__catId_catName_dict[cat.id] = cat.name

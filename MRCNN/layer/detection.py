@@ -59,9 +59,9 @@ class DetectionLayer(KL.Layer):
             coordinates are normalized.
         """
         # Class IDs per ROI
-        class_ids = tf.cast(tf.argmax(probs, axis=1), tf.int32)
+        class_ids = tf.cast(tf.argmax(probs, axis=1), tf.int64)
         # Class probability of the top class of each ROI
-        indices = tf.stack([tf.cast(tf.range(tf.shape(probs)[0]), tf.int32), class_ids], axis=1)
+        indices = tf.stack([tf.cast(tf.range(tf.shape(probs)[0]), tf.int64), class_ids], axis=1)
         class_scores = tf.gather_nd(probs, indices)
         # Class-specific bounding box deltas
         deltas_specific = tf.gather_nd(deltas, indices)
@@ -106,19 +106,19 @@ class DetectionLayer(KL.Layer):
                                 mode='CONSTANT', constant_values=-1)
             # Set shape so map_fn() can infer result shape
             class_keep.set_shape([self.config.DETECTION_MAX_INSTANCES])
-            class_keep = tf.cast(class_keep, tf.int16)
+            # class_keep = tf.cast(class_keep, tf.int16)
             return class_keep
 
         # 2. Map over class IDs
         nms_keep = tf.map_fn(nms_keep_map, 
-                             unique_pre_nms_class_ids,
-                             fn_output_signature=tf.TensorSpec(shape=[100],dtype=tf.int16))
+                             tf.cast(unique_pre_nms_class_ids, tf.int64),
+                             fn_output_signature=tf.TensorSpec(shape=[self.config.DETECTION_MAX_INSTANCES],dtype=tf.int64))
         # 3. Merge results into one list, and remove -1 padding
         nms_keep = tf.reshape(nms_keep, [-1])
         nms_keep = tf.gather(nms_keep, tf.where(nms_keep > -1)[:, 0])
         # 4. Compute intersection between keep and nms_keep
         keep = tf.sets.intersection(tf.expand_dims(keep, 0), 
-                                    tf.cast(tf.expand_dims(nms_keep, 0), tf.int64))
+                                    tf.expand_dims(nms_keep, 0))
         keep = tf.sparse.to_dense(keep)[0]
         # Keep top detections
         roi_count = self.config.DETECTION_MAX_INSTANCES

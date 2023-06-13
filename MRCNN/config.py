@@ -49,8 +49,8 @@ class Config:
 
     # The strides of each layer of the FPN Pyramid. These values
     # are based on a Resnet101 backbone.
-    # BACKBONE_STRIDES:list[int] = field(default_factory=lambda: [4, 8, 16, 32, 64])
-    BACKBONE_STRIDES:list[int] = field(default_factory=lambda: [8, 16, 32, 64, 128])
+    BACKBONE_STRIDES:list[int] = field(default_factory=lambda: [4, 8, 16, 32, 64])
+    # BACKBONE_STRIDES:list[int] = field(default_factory=lambda: [8, 16, 32, 64, 128])
     # BACKBONE_STRIDES = [4, 8, 16, 32]
 
     # Size of the fully-connected layers in the classification graph
@@ -167,11 +167,19 @@ class Config:
     # Gradient norm clipping
     GRADIENT_CLIP_NORM:float = 5.0
 
-    AUGMENTORS = ['HorizontalFlip', 'VerticalFlip', 'RandomRotate90']
+    AUG_PROB = 0.1
+    AUGMENTORS:list[str] = field(default_factory=lambda: 
+                                 ['HorizontalFlip', 'VerticalFlip', 'RandomRotate90', 
+                                  'Affine', 'BBoxSafeRandomCrop', 'PiecewiseAffine', 
+                                  'PixelDropout', 'RandomScale', 'RandomFog', 
+                                  'RandomRain', 'RandomSnow','MotionBlur', 
+                                  'GaussNoise','GaussianBlur', 'RandomGamma', 
+                                  'RandomBrightnessContrast'])
+
     
     IMAGE_SHAPE:np.ndarray = np.array([1024, 1024, 3])
 
-    FPN:str = 'NASFPN'
+    FPN:str = 'FPN'
 
     def __post_init__(self):
         """Set values of computed attributes."""
