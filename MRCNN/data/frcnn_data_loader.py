@@ -47,10 +47,9 @@ def make_predict_dataloader(image_pathes:str|list[str], config: Config):
 def make_test_dataloader(dataset: Dataset, config: Config, batch_size=None):
     batch_size = batch_size or config.TEST_BATCH_SIZE
 
-    pathes = tf.data.Dataset\
-        .from_tensor_slices([img.path for img in dataset.images])
-    img_ids = tf.data.Dataset\
-        .from_tensor_slices([img.id for img in dataset.images])
+    pathes, img_ids = zip(*[[ img.path, img.id ] for img in dataset.images])
+    pathes = tf.data.Dataset.from_tensor_slices(list(pathes))
+    img_ids = tf.data.Dataset.from_tensor_slices(list(img_ids))
 
     preprocessing = partial(preprocessing_test,
                             resize_shape=tuple( config.IMAGE_SHAPE[:2] ), 

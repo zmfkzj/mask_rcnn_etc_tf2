@@ -28,7 +28,7 @@ class BaseModel(KM.Model):
 
     The actual Keras model is in the keras_model property.
     """
-    def __init__(self, config:Config, dataset:Dataset, name):
+    def __init__(self, config:Config, val_dataset:Dataset, name):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -36,7 +36,7 @@ class BaseModel(KM.Model):
         """
         super().__init__(name=name)
         self.config = config
-        self.dataset = dataset
+        self.dataset = val_dataset
         self.num_classes = len(self.dataset.categories)
 
         self.anchors = get_anchors(config)

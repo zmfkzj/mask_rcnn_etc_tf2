@@ -36,43 +36,45 @@ for b in backbones:
                     # FPN='NASFPN',
                     FPN='FPN',
                     STEPS_PER_EPOCH=300,
-                    VALIDATION_STEPS=300
+                    VALIDATION_STEPS=300,
+                    RPN_NMS_THRESHOLD=0.5,
+                    DETECTION_MIN_CONFIDENCE=0.7
                     )
 
     if not os.path.isdir(f'save_{b}_{now}/chpt'):
         os.makedirs(f'save_{b}_{now}/chpt')
 
     with config.STRATEGY.scope():
-        model = FasterRcnn(config, train_dataset)
+        model = FasterRcnn(config, val_dataset)
 
-    model.load_weights('save_ResNet101_2023-06-13T12:45:22.885073/chpt/fingtune/train_loss')
-    model.compile()
+    # model.load_weights('save_ResNet101_2023-06-13T12:45:22.885073/chpt/fingtune/train_loss')
+    # model.compile()
 
 
     ###########################
     # Head train
     ###########################
-    # train_loader = make_train_dataloader(train_dataset, config)
-    # val_loader = make_test_dataloader(val_dataset, config)
+    train_loader = make_train_dataloader(train_dataset, config)
+    val_loader = make_test_dataloader(val_dataset, config)
 
-    # callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{b}_{now}/chpt/head/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
-    #             tf.keras.callbacks.ModelCheckpoint(f'save_{b}_{now}/chpt/head/train_loss',monitor='mean_loss',save_best_only=True, save_weights_only=True,mode='min'),
-    #             tf.keras.callbacks.TensorBoard(log_dir=f'save_{b}_{now}/logs/head')]
+    callbacks = [tf.keras.callbacks.ModelCheckpoint(f'save_{b}_{now}/chpt/head/best',monitor='val_mAP85',save_best_only=True, save_weights_only=True,mode='max'),
+                tf.keras.callbacks.ModelCheckpoint(f'save_{b}_{now}/chpt/head/train_loss',monitor='mean_loss',save_best_only=True, save_weights_only=True,mode='min'),
+                tf.keras.callbacks.TensorBoard(log_dir=f'save_{b}_{now}/logs/head')]
 
-    # model.set_trainable(TrainLayers.FPN_P)
+    model.set_trainable(TrainLayers.FPN_P)
 
-    # with config.STRATEGY.scope():
-    #     optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, amsgrad=True)
-    #     # optimizer = tf.keras.optimizers.SGD(learning_rate=config.LEARNING_RATE, momentum=config.LEARNING_MOMENTUM, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
-    #     model.compile(optimizer=optimizer)
+    with config.STRATEGY.scope():
+        optimizer = tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE, amsgrad=True)
+        # optimizer = tf.keras.optimizers.SGD(learning_rate=config.LEARNING_RATE, momentum=config.LEARNING_MOMENTUM, weight_decay=config.WEIGHT_DECAY, clipnorm=config.GRADIENT_CLIP_NORM)
+        model.compile(optimizer=optimizer)
 
 
-    # model.fit(train_loader, 
-    #         epochs=2,
-    #         callbacks=callbacks,
-    #         validation_data=val_loader, 
-    #         steps_per_epoch=config.STEPS_PER_EPOCH,
-    #         validation_steps=config.VALIDATION_STEPS)
+    model.fit(train_loader, 
+            epochs=2,
+            callbacks=callbacks,
+            validation_data=val_loader, 
+            steps_per_epoch=config.STEPS_PER_EPOCH,
+            validation_steps=config.VALIDATION_STEPS)
 
 
     ###########################
@@ -106,5 +108,6 @@ for b in backbones:
     ###########################
     # evaluate
     ###########################
-    result = model.evaluate(val_loader,steps=1000)
-    print(result)
+    result = model.evaluate(val_loader,steps=400)
+    for metric, value in result.items():
+        print(metric, value.numpy())

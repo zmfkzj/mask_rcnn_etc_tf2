@@ -38,7 +38,7 @@ class TestProcess(unittest.TestCase):
         anchors = get_anchors(self.config)
         bbox_std_dev = tf.cast(tf.expand_dims(self.config.BBOX_STD_DEV, 0), tf.float16)
         model = FasterRcnn(self.config, train_dataset)
-        model.load_weights('save_ResNet101_2023-06-13T11:02:08.174351/chpt/head/best')
+        model.load_weights('save_ResNet101_2023-06-13T16:03:05.512310/chpt/fingtune/train_loss')
 
         loader = tf.data.Dataset.zip((train_loader, val_loader)).take(10)
         for i, data in enumerate(loader):
@@ -79,7 +79,7 @@ class TestProcess(unittest.TestCase):
                 for b, s in zip(final_rois, final_scores):
                     _img = img.copy()
                     b = b.round().astype(np.int32)[[1,0,3,2]]
-                    _img = cv2.rectangle(_img, b[:2], b[2:], color=(255,255,0))
+                    _img = cv2.rectangle(_img, b[:2], b[2:], color=(0,255,0), thickness=2)
                     img = cv2.addWeighted(img, (1-s), _img, s, 0)
                     
                 cv2.imwrite(f'{i}_{t}.jpg', img)
