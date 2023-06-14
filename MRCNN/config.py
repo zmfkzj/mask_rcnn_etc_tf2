@@ -194,4 +194,13 @@ class Config:
         self.TRAIN_BATCH_SIZE:int = self.TRAIN_IMAGES_PER_GPU * self.GPU_COUNT
         self.TEST_BATCH_SIZE:int = self.TEST_IMAGES_PER_GPU * self.GPU_COUNT
 
-        # Input image size
+        if self.FPN=='FPN':
+            self.BACKBONE_STRIDES:list[int] = [4, 8, 16, 32, 64]
+            self.FPN_MIN_LEVEL = 2
+            self.FPN_MAX_LEVEL = 6
+        elif self.FPN == 'NASFPN':
+            self.BACKBONE_STRIDES:list[int] = [8, 16, 32, 64, 128]
+            self.FPN_MIN_LEVEL = 3
+            self.FPN_MAX_LEVEL = 7
+        else:
+            raise ValueError('Invalid FPN')

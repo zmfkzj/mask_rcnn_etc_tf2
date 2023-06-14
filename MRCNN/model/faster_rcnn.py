@@ -55,10 +55,10 @@ class FasterRcnn(BaseModel):
                 bbox_loss         * self.config.LOSS_WEIGHTS['mrcnn_bbox_loss']
                 ]
             losses = [loss / self.config.GPU_COUNT for loss in losses]
-            # scaled_losses = [self.optimizer.get_scaled_loss(l) for l in losses]
+            losses = [self.optimizer.get_scaled_loss(l) for l in losses]
 
         grad = tape.gradient(losses, self.trainable_variables)
-        # grad = self.optimizer.get_unscaled_gradients(scaled_grad)
+        grad = self.optimizer.get_unscaled_gradients(grad)
         self.optimizer.apply_gradients(zip(grad, self.trainable_variables))
 
         mean_loss = tf.reduce_mean(losses)
@@ -93,7 +93,7 @@ class FasterRcnn(BaseModel):
 
         ensure_shape_feature = {}
         for l, fm in mrcnn_feature_maps.items():
-            shape = self.backbone_output_shapes[int(l)-2]
+            shape = self.backbone_output_shapes[int(l)-self.config.FPN_MIN_LEVEL]
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         _rpn_rois = tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
@@ -112,7 +112,7 @@ class FasterRcnn(BaseModel):
 
         ensure_shape_feature = {}
         for l, fm in mrcnn_feature_maps.items():
-            shape = self.backbone_output_shapes[int(l)-2]
+            shape = self.backbone_output_shapes[int(l)-self.config.FPN_MIN_LEVEL]
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         # Normalize coordinates

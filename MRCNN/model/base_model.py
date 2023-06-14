@@ -51,7 +51,7 @@ class BaseModel(KM.Model):
         self.backbone = self.make_backbone_model(config)
         self.backbone_output_shapes = compute_backbone_shapes(config)
 
-        self.neck = FPN(config, self.backbone.output)
+        self.neck:FPN = FPN(config, self.backbone.output)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
 
         #losses
@@ -72,11 +72,8 @@ class BaseModel(KM.Model):
         backbone_output = self.backbone(input_image, training=training)
         mrcnn_feature_maps = self.neck(backbone_output, training=training)
         
-        rpn_feature_maps = [mrcnn_feature_maps['2'],
-                            mrcnn_feature_maps['3'],
-                            mrcnn_feature_maps['4'],
-                            mrcnn_feature_maps['5'],
-                            mrcnn_feature_maps['6']]
+
+        rpn_feature_maps = [mrcnn_feature_maps[str(l)] for l in range(self.config.FPN_MIN_LEVEL, self.config.FPN_MAX_LEVEL+1)]
 
         # Loop through pyramid layers
         layer_outputs = []  # list of lists

@@ -90,12 +90,11 @@ def make_train_dataloader(dataset:Dataset, config: Config, batch_size=None):
                             dataset=dataset,
                             augmentor=augmentor)
 
-        # .map(lambda pathes, ann_ids: preprocessing(path=pathes, ann_ids=ann_ids), num_parallel_calls=tf.data.AUTOTUNE)\
     data_loader = tf.data.Dataset\
         .zip((pathes, ann_ids))\
         .repeat()\
         .shuffle(len(dataset.images))\
-        .map(lambda pathes, ann_ids: preprocessing(path=pathes, ann_ids=ann_ids))\
+        .map(lambda pathes, ann_ids: preprocessing(path=pathes, ann_ids=ann_ids), num_parallel_calls=tf.data.AUTOTUNE)\
         .batch(batch_size)\
         .prefetch(tf.data.AUTOTUNE)
     return data_loader

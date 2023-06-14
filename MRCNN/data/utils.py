@@ -68,20 +68,19 @@ def normalize(image, pixel_mean, pixel_std):
 @tf.function
 def resize(image, bbox, masks, resize_shape):
     origin_shape = tf.shape(image)
-    image, window = resize_image(image, resize_shape)
+    image, window = tf.py_function(resize_image, (image, resize_shape), (tf.float16, tf.int16))
     bbox = resize_box(bbox, origin_shape, window)
 
     masks = tf.expand_dims(masks, -1)
     masks = tf.cast(masks, tf.float16)
     masks = tf.image.grayscale_to_rgb(masks)
-    masks, _ = resize_image(masks, resize_shape)
+    masks, _ = tf.py_function(resize_image, (masks, resize_shape), (tf.float16, tf.int16))
     masks = tf.cast(tf.round(masks[...,0]), tf.bool)
 
     return image, bbox, masks
 
 
-@tf.function
-def resize_image(images, shape):
+def resize_image(images, resize_shape):
     """Resizes an image keeping the aspect ratio unchanged.
     Returns:
     image: the resized image
@@ -92,31 +91,39 @@ def resize_image(images, shape):
     scale: The scale factor used to resize the image
     padding: Padding added to the image [(top, bottom), (left, right), (0, 0)]
     """
-    many_img = True
-    if tf.rank(images)==3:
-        images = tf.expand_dims(images, 0)
-        many_img = False
-    
-    images = tf.ensure_shape(images, [None, None, None,3])
-    images = tf.image.resize(images, 
-                            shape[:2],
-                            preserve_aspect_ratio=True, 
-                            method=tf.image.ResizeMethod.BILINEAR)
+    images = images.numpy()
+    resize_shape = np.array(resize_shape)
 
-    shape = tf.cast(shape, tf.int32)
+    many_img = True
+    if len(images.shape)==3:
+        images = np.expand_dims(images, 0)
+        many_img = False
+
+    image_shape = images.shape[1:3]
+    scale = np.max(image_shape / resize_shape[:2])
+
+    new_shape = (image_shape / scale).round().astype(np.int32)
+    
+    new_images = [ ]
+    for img in images:
+        img = img.round().astype(np.uint8)
+        img = cv2.resize(img, new_shape, interpolation=cv2.INTER_LINEAR)
+        new_images.append(img)
+    
+    images = np.stack(new_images)
+
     # Get new height and width
-    h = tf.shape(images)[1]
-    w = tf.shape(images)[2]
-    top_pad = (shape[0] - h) // 2
-    bottom_pad = shape[0] - h - top_pad
-    left_pad = (shape[1] - w) // 2
-    right_pad = shape[1] - w - left_pad
-    padding = tf.stack([(0,0),(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
-    images = tf.pad(images, padding, mode='constant', constant_values=0)
-    window = tf.stack((top_pad, left_pad, h + top_pad, w + left_pad))
+    _, h, w, _ = images.shape
+    top_pad = (resize_shape[0] - h) // 2
+    bottom_pad = resize_shape[0] - h - top_pad
+    left_pad = (resize_shape[1] - w) // 2
+    right_pad = resize_shape[1] - w - left_pad
+    padding = np.stack([(0,0),(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)])
+    images = np.pad(images, padding, mode='constant', constant_values=0)
+    window = np.stack((top_pad, left_pad, h + top_pad, w + left_pad))
 
     if not many_img:
-        images = tf.squeeze(images, 0)
+        images = np.squeeze(images, 0)
 
     return images, window
 
@@ -152,29 +159,27 @@ def minimize_mask(bbox, mask, mini_shape):
 
     See inspect_data.ipynb notebook for more details.
     """
-    def f(arg):
-        m, b = arg
-        m = tf.ensure_shape(m, [None,None])
-        m = tf.cast(m,tf.bool)
-        y1 = tf.cast(tf.round(b[0]), tf.int16)
-        x1 = tf.cast(tf.round(b[1]), tf.int16)
-        y2 = tf.cast(tf.round(b[2]), tf.int16)
-        x2 = tf.cast(tf.round(b[3]), tf.int16)
+    def f(m, b):
+        m = m.numpy()
+        b = b.numpy()
+
+        y1, x1, y2, x2 = b.round().astype(np.int32)
 
         m = m[y1:y2, x1:x2]
-        if tf.size(m) == 0:
-            m = tf.zeros(mini_shape, tf.bool)
+        if m.size == 0:
+            m = np.zeros(mini_shape, np.bool_)
             return m
 
         # Resize with bilinear interpolation
-        m = tf.expand_dims(m,2)
-        m = tf.cast(m, tf.uint8)
-        m = tf.image.resize(m, mini_shape, method=tf.image.ResizeMethod.BILINEAR)
-        m = tf.squeeze(m, -1)
-        m = tf.cast(m, tf.bool)
+        m = np.expand_dims(m,2)
+        m = m.astype(np.uint8)
+        m = cv2.resize(m, mini_shape, interpolation=cv2.INTER_LINEAR)
+        m = m.astype(np.bool_)
         return m
     
-    mini_mask = tf.map_fn(f, [mask,bbox],fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool), )
+    mini_mask = tf.map_fn(lambda inputs: tf.py_function(f, (inputs[0], inputs[1]), tf.bool), 
+                          (mask,bbox),
+                          fn_output_signature=tf.TensorSpec(shape=mini_shape, dtype=tf.bool), )
     return mini_mask
 
 
@@ -379,7 +384,7 @@ def get_anchors(config:Config):
 
 def preprocessing_predict(path, resize_shape, pixel_mean, pixel_std):
     image = load_image(path)
-    resized_image, window = resize_image(image, resize_shape)
+    resized_image, window = tf.py_function(resize_image, (image, resize_shape), (tf.float16, tf.int16))
     norm_image = normalize(resized_image, pixel_mean, pixel_std)
     origin_image_shape = tf.shape(image)
     return norm_image, window, origin_image_shape, path
@@ -387,7 +392,7 @@ def preprocessing_predict(path, resize_shape, pixel_mean, pixel_std):
 
 def preprocessing_test(path,resize_shape, pixel_mean, pixel_std, img_id):
     image = load_image(path)
-    resized_image, window = resize_image(image, resize_shape)
+    resized_image, window = tf.py_function(resize_image, (image, resize_shape), (tf.float16, tf.int16))
     norm_image = normalize(resized_image, pixel_mean, pixel_std)
     origin_image_shape = tf.shape(image)
     return norm_image, window, origin_image_shape, img_id

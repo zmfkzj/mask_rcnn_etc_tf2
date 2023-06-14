@@ -7,22 +7,27 @@ from MRCNN.config import Config
 
 
 class FPN(KL.Layer):
-    def __init__(self, config:Config, backbone_output):
+    def __init__(self, config:Config, backbone_output, nas_train=False):
         super().__init__(name='fpn_model')
+        self.nas_train = nas_train
+        self.config = config
 
         output_specs = {str(i+2):t.get_shape() for i,t in enumerate(backbone_output.values())}
-        if config.FPN == 'FPN':
+        if self.config.FPN == 'FPN':
             self.fpn = tfm.vision.decoders.FPN(input_specs=output_specs, 
                                                 num_filters=config.TOP_DOWN_PYRAMID_SIZE,
-                                                min_level=2,
-                                                max_level=6)
-        elif config.FPN == 'NASFPN':
+                                                min_level=self.config.FPN_MIN_LEVEL,
+                                                max_level=self.config.FPN_MAX_LEVEL)
+        elif self.config.FPN == 'NASFPN':
             self.fpn = tfm.vision.decoders.NASFPN(input_specs=output_specs,
                                                 num_filters=config.TOP_DOWN_PYRAMID_SIZE,
-                                                min_level=2,
-                                                max_level=6)
+                                                min_level=self.config.FPN_MIN_LEVEL,
+                                                max_level=self.config.FPN_MAX_LEVEL)
         else:
             raise ValueError('Invalid FPN')
     
     def call(self, data):
-        return self.fpn(data)
+        if self.nas_train and self.config.FPN=='NASFPN':
+            return self.fpn.call(data)
+        else:
+            return self.fpn(data)
