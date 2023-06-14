@@ -1,9 +1,9 @@
 logs*
-save_model*
 mask_rcnn_coco.h5
 *.h5
 nohup.out
 save_*
+dataloader_cache*
 
 
 # Byte-compiled / optimized / DLL files

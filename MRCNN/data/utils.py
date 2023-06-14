@@ -398,24 +398,21 @@ def preprocessing_test(path,resize_shape, pixel_mean, pixel_std, img_id):
     return norm_image, window, origin_image_shape, img_id
 
 
-def preprocessing_train(path, 
-                        resize_shape, 
+def preprocessing_train(image, boxes, masks, loader_class_ids,
                         pixel_mean, 
                         pixel_std, 
-                        ann_ids, 
                         anchors, 
                         rpn_train_anchors_per_image,
                         rpn_bbox_std_dev,
                         max_gt_instances, 
                         mini_mask_shape,
-                        dataset,
                         augmentor=None):
-    image = load_image(path)
-    boxes, loader_class_ids, masks =\
-        tf.py_function(lambda ann_ids, h, w: load_gt(dataset, ann_ids, h, w), 
-                       (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16, tf.bool))
+    # image = load_image(path)
+    # boxes, loader_class_ids, masks =\
+    #     tf.py_function(lambda ann_ids, h, w: load_gt(dataset, ann_ids, h, w), 
+    #                    (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16, tf.bool))
 
-    image, boxes, masks = resize(image, boxes, masks, resize_shape)
+    # image, boxes, masks = resize(image, boxes, masks, resize_shape)
 
     if augmentor is not None:
         image, boxes, masks, loader_class_ids =  tf.py_function(augmentor, (image, boxes, masks, loader_class_ids), (tf.uint8, tf.float16, tf.bool, tf.int16))
@@ -446,6 +443,16 @@ def preprocessing_train(path,
     masks = tf.transpose(masks, [1,2,0])
 
     return norm_image, boxes, loader_class_ids, rpn_match, rpn_bbox, masks
+
+
+def ann_load_resize(path, ann_ids, dataset, resize_shape):
+    image = load_image(path)
+    boxes, loader_class_ids, masks =\
+        tf.py_function(lambda ann_ids, h, w: load_gt(dataset, ann_ids, h, w), 
+                       (ann_ids,tf.shape(image)[0],tf.shape(image)[1]),(tf.float16, tf.int16, tf.bool))
+
+    image, boxes, masks = resize(image, boxes, masks, resize_shape)
+    return image, boxes, masks, loader_class_ids
 
 
 def get_augmentor(config: Config):

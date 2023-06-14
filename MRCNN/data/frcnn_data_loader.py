@@ -58,6 +58,7 @@ def make_test_dataloader(dataset: Dataset, config: Config, batch_size=None):
 
     data_loader = tf.data.Dataset\
         .zip((pathes,img_ids))\
+        .repeat() \
         .map(lambda pathes, img_ids: preprocessing(path=pathes, img_id=img_ids), num_parallel_calls=tf.data.AUTOTUNE)\
         .batch(batch_size)\
         .prefetch(tf.data.AUTOTUNE)
@@ -78,8 +79,11 @@ def make_train_dataloader(dataset:Dataset, config: Config, batch_size=None):
 
     augmentor = get_augmentor(config)
 
+    load_resize = partial(ann_load_resize, 
+                          resize_shape=tuple( config.IMAGE_SHAPE[:2] ), 
+                          dataset=dataset)
+
     preprocessing = partial(preprocessing_train,
-                            resize_shape=tuple( config.IMAGE_SHAPE[:2] ), 
                             pixel_mean=config.PIXEL_MEAN, 
                             pixel_std=config.PIXEL_STD, 
                             anchors=anchors, 
@@ -87,14 +91,15 @@ def make_train_dataloader(dataset:Dataset, config: Config, batch_size=None):
                             rpn_bbox_std_dev=config.RPN_BBOX_STD_DEV,
                             max_gt_instances=config.MAX_GT_INSTANCES, 
                             mini_mask_shape=config.MINI_MASK_SHAPE,
-                            dataset=dataset,
                             augmentor=augmentor)
 
     data_loader = tf.data.Dataset\
         .zip((pathes, ann_ids))\
-        .repeat()\
         .shuffle(len(dataset.images))\
-        .map(lambda pathes, ann_ids: preprocessing(path=pathes, ann_ids=ann_ids), num_parallel_calls=tf.data.AUTOTUNE)\
-        .batch(batch_size)\
+        .map(load_resize, num_parallel_calls=tf.data.AUTOTUNE) \
+        .cache('./dataloader_cache')\
+        .repeat()\
+        .map(preprocessing, num_parallel_calls=tf.data.AUTOTUNE)\
+        .batch(batch_size) \
         .prefetch(tf.data.AUTOTUNE)
     return data_loader
