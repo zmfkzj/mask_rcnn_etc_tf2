@@ -167,7 +167,7 @@ class Config:
     # Gradient norm clipping
     GRADIENT_CLIP_NORM:float = 5.0
 
-    AUG_PROB = 0.1
+    AUG_PROB = 0.15
     AUGMENTORS:list[str] = field(default_factory=lambda: 
                                  ['HorizontalFlip', 'VerticalFlip', 'RandomRotate90', 
                                   'Affine', 'BBoxSafeRandomCrop', 'PiecewiseAffine', 

@@ -107,7 +107,7 @@ def resize_image(images, resize_shape):
     new_images = [ ]
     for img in images:
         img = img.round().astype(np.uint8)
-        img = cv2.resize(img, new_shape, interpolation=cv2.INTER_LINEAR)
+        img = cv2.resize(img, new_shape[::-1], interpolation=cv2.INTER_LINEAR)
         new_images.append(img)
     
     images = np.stack(new_images)
@@ -173,7 +173,7 @@ def minimize_mask(bbox, mask, mini_shape):
         # Resize with bilinear interpolation
         m = np.expand_dims(m,2)
         m = m.astype(np.uint8)
-        m = cv2.resize(m, mini_shape, interpolation=cv2.INTER_LINEAR)
+        m = cv2.resize(m, mini_shape[::-1], interpolation=cv2.INTER_LINEAR)
         m = m.astype(np.bool_)
         return m
     
@@ -457,7 +457,7 @@ def ann_load_resize(path, ann_ids, dataset, resize_shape):
 
 def get_augmentor(config: Config):
     augment_list = config.AUGMENTORS
-    if not augment_list:
+    if augment_list is None or not augment_list:
         return None
 
     transforms = []

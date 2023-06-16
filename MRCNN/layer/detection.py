@@ -3,7 +3,7 @@ import keras.api._v2.keras.layers as KL
 
 from MRCNN.config import Config
 from .proposal import apply_box_deltas_graph, clip_boxes_graph
-from ..model_utils.miscellenous_graph import NormBoxesGraph
+from ..model_utils.miscellenous_graph import norm_boxes_graph
 from MRCNN import utils
 
 
@@ -29,7 +29,7 @@ class DetectionLayer(KL.Layer):
         # in the image that excludes the padding.
         # Use the shape of the first image in the batch to normalize the window
         # because we know that all images get resized to the same size.
-        window = NormBoxesGraph()(window, image_shape[:2])
+        window = norm_boxes_graph(window, image_shape[:2])
 
         # Run detection refinement graph on each item in the batch
         detections_batch = tf.map_fn(lambda x: self.refine_detections_graph(*x),

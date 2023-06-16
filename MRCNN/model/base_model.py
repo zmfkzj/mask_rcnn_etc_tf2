@@ -14,7 +14,6 @@ from MRCNN.data.dataset import Dataset
 from MRCNN.data.utils import get_anchors
 from MRCNN.enums import TrainLayers
 from MRCNN.layer.proposal import ProposalLayer
-from MRCNN.loss import MrcnnBboxLossGraph, MrcnnClassLossGraph, MrcnnMaskLossGraph, RpnBboxLossGraph, RpnClassLossGraph
 from MRCNN.metric import F1Score
 from ..layer import FPN
 from .rpn import RPN
@@ -51,15 +50,8 @@ class BaseModel(KM.Model):
         self.backbone = self.make_backbone_model(config)
         self.backbone_output_shapes = compute_backbone_shapes(config)
 
-        self.neck:FPN = FPN(config, self.backbone.output)
+        self.neck:FPN =FPN(config, self.backbone.output)
         self.rpn = RPN(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), name='rpn_model')
-
-        #losses
-        self.rpn_class_loss = RpnClassLossGraph(name="loss_rpn_class")
-        self.rpn_bbox_loss = RpnBboxLossGraph(name="loss_rpn_bbox")
-        self.class_loss = MrcnnClassLossGraph(name="loss_mrcnn_class")
-        self.bbox_loss = MrcnnBboxLossGraph(name="loss_mrcnn_bbox")
-        self.mask_loss = MrcnnMaskLossGraph(name="loss_mrcnn_bbox")
 
         # for evaluation
         with no_automatic_dependency_tracking_scope(self):
@@ -102,6 +94,7 @@ class BaseModel(KM.Model):
         self.param_image_ids.clear()
         self.detection_results.clear()
 
+        self.neck.set_nas_train_mode(False)
         super().predict(x, batch_size, verbose, steps, callbacks, max_queue_size, workers, use_multiprocessing)
         return self.detection_results
 
@@ -109,7 +102,10 @@ class BaseModel(KM.Model):
         self.param_image_ids.clear()
         self.detection_results.clear()
 
+        current_nas_train = self.neck.nas_train
+        self.neck.set_nas_train_mode(False)
         super().evaluate(x, y, batch_size, verbose, sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing, return_dict, **kwargs)
+        self.neck.set_nas_train_mode(current_nas_train)
 
         mAP, mAP50, mAP75, mAP85, F1_01, F1_02, F1_03, F1_04, F1_05, F1_06, F1_07, F1_08, F1_09 = \
             tf.py_function(self.get_metrics, (), 
@@ -163,6 +159,7 @@ class BaseModel(KM.Model):
 
 
     def get_metrics(self, eval_type='bbox', iou_thresh=0.5):
+
         if self.detection_results:
             results, evalImgs = self.dataset.evaluate(self.detection_results, self.param_image_ids, iou_threshold=[None,0.5,0.75,0.85], eval_type=eval_type)
 
@@ -226,7 +223,7 @@ class BaseModel(KM.Model):
             mrcnn_mask = mrcnn_mask.numpy()
 
         for b in range(image_ids.shape[0]):
-            if image_ids[b]==0:
+            if image_ids[b]==0 or image_ids[b] in self.param_image_ids:
                 continue
 
             self.param_image_ids.add(image_ids[b])

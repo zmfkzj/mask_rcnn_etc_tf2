@@ -25,9 +25,15 @@ class FPN(KL.Layer):
                                                 max_level=self.config.FPN_MAX_LEVEL)
         else:
             raise ValueError('Invalid FPN')
+        
     
+    @tf.function
     def call(self, data):
         if self.nas_train and self.config.FPN=='NASFPN':
             return self.fpn.call(data)
         else:
             return self.fpn(data)
+    
+
+    def set_nas_train_mode(self, mode: bool):
+        self.nas_train = mode

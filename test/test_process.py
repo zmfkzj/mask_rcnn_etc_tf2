@@ -20,7 +20,8 @@ class TestProcess(unittest.TestCase):
         # self.json_path = 'test/source/instances_train_fix.json'
         # self.json_path = 'test/source/test.json'
         # self.img_dir = 'test/source/images'
-        self.config = Config(AUGMENTORS = None)
+        self.config = Config(FPN='NASFPN')
+        # self.config = Config(AUGMENTORS = None)
         # self.json_path = '/home/min/4t/dataset/coco/annotations/instances_val2017.json'
         # self.img_dir = '/home/min/4t/dataset/coco/val2017'
         self.json_path = '/home/min/4t/dataset/detection_comp/train.json'
@@ -38,7 +39,7 @@ class TestProcess(unittest.TestCase):
         anchors = get_anchors(self.config)
         bbox_std_dev = tf.cast(tf.expand_dims(self.config.BBOX_STD_DEV, 0), tf.float16)
         model = FasterRcnn(self.config, train_dataset)
-        model.load_weights('save_ResNet101_2023-06-13T16:03:05.512310/chpt/fingtune/train_loss')
+        model.load_weights('save_ResNet101_2023-06-15T01:02:10.752810/chpt/fingtune/best')
 
         loader = tf.data.Dataset.zip((train_loader, val_loader)).take(10)
         for i, data in enumerate(loader):

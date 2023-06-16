@@ -5,10 +5,11 @@ import tensorflow_models as tfm
 
 from MRCNN.config import Config
 from MRCNN.data.dataset import Dataset
-from MRCNN.model.base_model import BaseModel
+from MRCNN.loss import *
 
 from ..layer import DetectionLayer, FrcnnTarget
-from ..model_utils.miscellenous_graph import DenormBoxesGraph, NormBoxesGraph
+from .base_model import BaseModel
+from ..model_utils.miscellenous_graph import denorm_boxes_graph, norm_boxes_graph
 from . import Classifier
 
 
@@ -23,7 +24,7 @@ class FasterRcnn(BaseModel):
         """
         super().__init__(config, dataset, name=name)
 
-        self.ROIAlign_classifier = tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier")
+        self.ROIAlign_classifier = tf.function(tfm.vision.layers.MultilevelROIAligner(config.POOL_SIZE, name="roi_align_classifier"))
         self.classifier = Classifier(config.POOL_SIZE, self.num_classes, fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
     
@@ -39,10 +40,10 @@ class FasterRcnn(BaseModel):
 
 
             # Losses
-            rpn_class_loss = self.rpn_class_loss( input_rpn_match, rpn_class_logits)
-            rpn_bbox_loss = self.rpn_bbox_loss(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
-            class_loss = self.class_loss(target_class_ids, mrcnn_class_logits)
-            bbox_loss = self.bbox_loss(target_bbox, target_class_ids, mrcnn_bbox)
+            rpn_class_loss = rpn_class_loss_graph( input_rpn_match, rpn_class_logits)
+            rpn_bbox_loss = rpn_bbox_loss_graph(input_rpn_bbox, input_rpn_match, rpn_bbox, batch_size)
+            class_loss = mrcnn_class_loss_graph(target_class_ids, mrcnn_class_logits)
+            bbox_loss = mrcnn_bbox_loss_graph(target_bbox, target_class_ids, mrcnn_bbox)
 
             reg_losses = tf.add_n([tf.cast(keras.regularizers.l2(self.config.WEIGHT_DECAY)(w), tf.float32) / tf.cast(tf.size(w), tf.float32)
                             for w in self.trainable_weights if 'gamma' not in w.name and 'beta' not in w.name])
@@ -96,7 +97,7 @@ class FasterRcnn(BaseModel):
             shape = self.backbone_output_shapes[int(l)-self.config.FPN_MIN_LEVEL]
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
-        _rpn_rois = tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
+        _rpn_rois = tf.cast(tf.vectorized_map(lambda x: denorm_boxes_graph(x,list(self.config.IMAGE_SHAPE)[:2]),rpn_rois), tf.float16)
         roi_cls_feature = self.ROIAlign_classifier(ensure_shape_feature, _rpn_rois)
 
         # Network Heads
@@ -116,7 +117,7 @@ class FasterRcnn(BaseModel):
             ensure_shape_feature[l] = tf.ensure_shape(fm, (None,)+shape+(self.config.TOP_DOWN_PYRAMID_SIZE,))
 
         # Normalize coordinates
-        gt_boxes = NormBoxesGraph()(input_gt_boxes, self.config.IMAGE_SHAPE[:2])
+        gt_boxes = norm_boxes_graph(input_gt_boxes, self.config.IMAGE_SHAPE[:2])
 
         # Generate detection targets
         # Subsamples proposals and generates target outputs for training
@@ -126,7 +127,7 @@ class FasterRcnn(BaseModel):
             FrcnnTarget(self.config, name="proposal_targets")([rpn_rois, input_gt_class_ids, gt_boxes])
         
 
-        _rois =  tf.cast(tf.vectorized_map(lambda x: DenormBoxesGraph()(x,list(self.config.IMAGE_SHAPE)[:2]),rois), tf.float16)
+        _rois =  tf.cast(tf.vectorized_map(lambda x: denorm_boxes_graph(x,list(self.config.IMAGE_SHAPE)[:2]),rois), tf.float16)
         roi_cls_features = self.ROIAlign_classifier(ensure_shape_feature, _rois)
 
         # Network Heads
